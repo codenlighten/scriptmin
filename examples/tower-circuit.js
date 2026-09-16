@@ -70,4 +70,19 @@ function millerLikeCircuit (steps) {
   return { inputs: 24, gates: b.gates, outputs: flat12(f) }
 }
 
-module.exports = { Builder, millerLikeCircuit }
+// The circuit as scriptmin IR, for `scriptmin compile`.
+function toIR (circuit, modulus) {
+  return {
+    modulus: '0x' + modulus.toString(16),
+    inputs: circuit.inputs,
+    gates: circuit.gates.map(g => (g.k !== undefined ? Object.assign({}, g, { k: String(g.k) }) : g)),
+    outputs: circuit.outputs
+  }
+}
+
+module.exports = { Builder, millerLikeCircuit, toIR }
+
+if (require.main === module) {
+  const { P } = require('./naive-field-compiler')
+  process.stdout.write(JSON.stringify(toIR(millerLikeCircuit(Number(process.argv[2] || 1)), P)) + '\n')
+}

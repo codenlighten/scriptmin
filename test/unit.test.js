@@ -199,3 +199,30 @@ test('Fp12 tower multiplication: smaller than a last-use compiler and still corr
   assert.ok(out.ok, out.err)
   assert.deepStrictEqual(out.stack, expected)
 })
+
+test('field circuit compiler: lazy reduction matches the circuit exactly', () => {
+  const { compileField, evaluateIR } = require('../src/field')
+  const ir = {
+    modulus: '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff43', // 2^256 - 189
+    inputs: 3,
+    gates: [
+      { op: 'mul', a: 0, b: 1 }, // 3
+      { op: 'sub', a: 2, b: 3 }, // 4  may go negative before reduction
+      { op: 'mulc', a: 4, k: '-7' }, // 5
+      { op: 'const', v: '12345' }, // 6
+      { op: 'add', a: 5, b: 6 }, // 7
+      { op: 'mul', a: 7, b: 7 }, // 8
+      { op: 'assertEqual', a: 3, b: 3 } // 9
+    ],
+    outputs: [8, 4]
+  }
+  for (const maxBits of [0, 300, 1024]) {
+    const r = compileField(ir, { maxBits, tests: 15 })
+    assert.strictEqual(r.report.checked, 17)
+    assert.ok(r.report.optimized <= r.report.reference + 8)
+  }
+  // A failing assertion fails the script too.
+  const failing = Object.assign({}, ir, { gates: ir.gates.concat([{ op: 'assertEqual', a: 0, b: 1 }]) })
+  assert.strictEqual(evaluateIR(failing, [1n, 2n, 3n]).ok, false)
+  compileField(failing, { tests: 5 })
+})

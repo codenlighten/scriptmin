@@ -12,6 +12,12 @@ const USAGE = `scriptmin — Bitcoin Script minimizer
 
 Usage:
   scriptmin [options] <script-file | ->
+  scriptmin compile [options] <circuit.json>
+
+"compile" builds a script from a prime-field circuit (see README) with lazy
+modular reduction, stack-optimizes it, and checks it against the circuit.
+Compile options: --max-bits <n> (default 1024), --tests <n> (default 20),
+-o, --asm, --json, --effort.
 
 Input is hex, ASM (bsv format), or raw bytes (--binary). "-" reads stdin.
 
@@ -135,7 +141,48 @@ function printReport (r, a) {
   return out.join('\n') + '\n'
 }
 
+function compileMain (argv) {
+  const a = { maxBits: 1024, tests: 20, effort: 'medium' }
+  for (let i = 0; i < argv.length; i++) {
+    const x = argv[i]
+    const next = () => { if (i + 1 >= argv.length) die(`${x} needs a value`); return argv[++i] }
+    if (x === '--max-bits') a.maxBits = Number(next())
+    else if (x === '--tests') a.tests = Number(next())
+    else if (x === '-o' || x === '--out') a.out = next()
+    else if (x === '--asm') a.asm = true
+    else if (x === '--json') a.json = true
+    else if (x === '--effort') a.effort = next()
+    else if (x.startsWith('-')) die(`unknown option ${x}`)
+    else a.file = x
+  }
+  if (!a.file) die('compile needs a circuit file')
+  const { compileField } = require('../src/field')
+  let res
+  try {
+    res = compileField(JSON.parse(fs.readFileSync(a.file, 'utf8')), { maxBits: a.maxBits, tests: a.tests, optimizeOptions: { effort: a.effort } })
+  } catch (e) {
+    die(e.message)
+  }
+  if (a.out) fs.writeFileSync(a.out, a.asm ? toAsm(parse(res.script)) + '\n' : res.script.toString('hex') + '\n')
+  const r = res.report
+  if (a.json) {
+    process.stdout.write(JSON.stringify({ script: res.script.toString('hex'), gates: r.gates, maxBits: r.maxBits, bytes: r.optimized, referenceBytes: r.reference, checked: r.checked, ms: r.ms }, null, 2) + '\n')
+  } else {
+    const out = []
+    out.push(`Gates:                    ${lpad(fmt(r.gates), 10)}`)
+    out.push(`Reduce every operation:   ${lpad(fmt(r.reference), 10)} bytes (stack-optimized)`)
+    out.push(`Lazy reduction (${r.maxBits} bits): ${lpad(fmt(r.optimized), 10)} bytes`)
+    out.push(`Saved by lazy reduction:  ${lpad(fmt(r.reference - r.optimized), 10)} bytes (${(100 * (r.reference - r.optimized) / r.reference).toFixed(2)}%)`)
+    out.push('', `Checked against the circuit on ${r.checked} input vectors (all zeros, all p-1, random).`)
+    out.push(`Stack optimization of the lazy program: ${r.stack.verification.symbolic.ok ? 'proof passed' : 'proof skipped'}.`)
+    out.push('', `(${r.ms} ms)`)
+    process.stdout.write(out.join('\n') + '\n')
+    if (!a.out) process.stdout.write('\n' + res.script.toString('hex') + '\n')
+  }
+}
+
 function main () {
+  if (process.argv[2] === 'compile') return compileMain(process.argv.slice(3))
   const a = parseArgs(process.argv.slice(2))
   const buf = readInput(a)
 

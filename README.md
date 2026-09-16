@@ -51,6 +51,7 @@ scriptmin --json script.hex              # machine-readable report
 scriptmin --effort high script.hex       # wider windows, deeper search
 scriptmin --db patterns.json script.hex  # reuse and grow a pattern database
 scriptmin --stacks inputs.json script.hex  # test against real unlocking stacks
+scriptmin compile circuit.json           # compile a prime-field circuit (see below)
 ```
 
 Input can be hex, ASM in bsv's format (`OP_DUP 14 OP_PICK`, data as bare hex),
@@ -160,6 +161,71 @@ realistic unlocking stacks with `--stacks`.
 - **Push re-encoding changes behaviour only under the `MINIMALDATA` policy
   flag,** where the original script would already have failed.
 
+## Circuit compiler
+
+Once arithmetic has been emitted as Script, the optimizer cannot know that
+values only matter modulo p. A circuit carries that information, so
+`scriptmin compile` starts from one and uses **lazy reduction**: sums,
+differences, constant multiples and products are left unreduced while they
+fit in a bit budget, and a value is reduced only when it would outgrow the
+budget or must be canonical (outputs and equality checks). The program then
+goes through the stack optimizer like any other script.
+
+```
+$ scriptmin compile examples/ir/fp12-step.json
+Gates:                           624
+Reduce every operation:        3,779 bytes (stack-optimized)
+Lazy reduction (1024 bits):      2,173 bytes
+Saved by lazy reduction:       1,606 bytes (42.50%)
+
+Checked against the circuit on 22 input vectors (all zeros, all p-1, random).
+Stack optimization of the lazy program: proof passed.
+```
+
+Circuit format:
+
+```json
+{
+  "modulus": "0x3fff...ff81",
+  "inputs": 24,
+  "gates": [
+    { "op": "mul", "a": 0, "b": 1 },
+    { "op": "sub", "a": 24, "b": 2 },
+    { "op": "mulc", "a": 25, "k": "9" },
+    { "op": "const", "v": "5" },
+    { "op": "assertEqual", "a": 26, "b": 27 }
+  ],
+  "outputs": [26]
+}
+```
+
+Values `0 … inputs-1` are the inputs (first input deepest on the stack, each
+assumed to be in `[0, p)`), and value `inputs + j` is the result of gate `j`.
+Outputs are left on the stack canonical, first output deepest.
+
+The bit budget trades script size against number size. On a four-step Fp12
+chain (`f ← f² · g`):
+
+| budget | bytes | interpreter time |
+| ---: | ---: | ---: |
+| reduce every op | 14,654 | 101 ms |
+| 512 bits | 9,924 | 58 ms |
+| 1,024 bits (default) | 8,598 | 65 ms |
+| 2,048 bits | 8,324 | 104 ms |
+
+Moderate budgets are smaller *and* faster, because most `OP_MOD`s disappear.
+
+**Verification is different here.** A lazily reduced program computes
+different intermediate integers, so it is not proven equivalent symbolically
+to the reference. Instead both are run on the interpreter and compared with
+the circuit's exact results: all-zero inputs, all `p-1` inputs, and random
+field elements (`--tests`). For circuits of additions, subtractions and
+multiplications, a program that is wrong as a polynomial map disagrees at a
+random point with probability at least 1 − degree/p (Schwartz–Zippel), which
+is overwhelming for a 254-bit prime. The stack optimization applied afterwards
+is still proven symbolically. Inputs outside `[0, p)` are not range-checked:
+that remains the verifier's responsibility, as with any field circuit.
+
 ## Library
 
 ```js
@@ -242,14 +308,15 @@ src/superopt.js   A* search, exhaustive sequence table, pattern cache
 src/windows.js    window selection and dynamic programming
 src/verify.js     whole-script proof, differential interpreter testing
 src/profile.js    byte profiler
+src/field.js      circuit IR compiler with lazy modular reduction
 src/optimize.js   pipeline and report
 bin/scriptmin.js  command line
 ```
 
 ## Roadmap
 
-- An IR mode that takes a compiler's symbolic program directly, before
-  emission discards information.
+- More circuit-level rewrites: shared-factor rewriting (`a*b + a*c` to
+  `a*(b+c)`), Karatsuba-style multiplication choices, squaring formulas.
 - Algebraic rewriting (`a*b + a*c` becomes `a*(b+c)`), with domain-aware rules
   for Fp, Fp2, Fp6 and Fp12 and SMT-checked side conditions.
 - Stack scheduling across `IF`/`ELSE` where both branches can be modelled.
