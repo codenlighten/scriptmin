@@ -155,3 +155,21 @@ test('CLI optimizes, explains and profiles', () => {
   }
   assert.strictEqual(OP.OP_DROP, 0x75)
 })
+
+test('schedules through the alt stack without keeping spare copies', () => {
+  const r = opt('OP_TOALTSTACK OP_2 OP_PICK OP_2 OP_PICK OP_MUL OP_FROMALTSTACK OP_3 OP_ROLL OP_DROP OP_ADD OP_NIP OP_NIP')
+  assert.strictEqual(asm(r), 'OP_NIP OP_TOALTSTACK OP_MUL OP_FROMALTSTACK OP_ADD')
+  assert.strictEqual(asm(opt('OP_2 OP_PICK OP_2 OP_PICK OP_ADD OP_TOALTSTACK OP_2DROP OP_DROP OP_FROMALTSTACK')), 'OP_DROP OP_ADD')
+})
+
+test('interpreter runs are isolated from each other', () => {
+  const { evaluate } = require('../src/verify')
+  const flags = require('@smartledger/bsv').Script.Interpreter.currentConsensusFlags()
+  // OP_INVERT on a boolean result corrupts the interpreter's shared TRUE buffer.
+  evaluate(toBuffer('OP_2 OP_2 OP_3 OP_WITHIN OP_INVERT'), [], flags)
+  assert.deepStrictEqual(evaluate(toBuffer('OP_2 OP_2 OP_3 OP_WITHIN'), [], flags).stack, ['01'])
+  // ... and pushed data aliases the script bytes.
+  const script = toBuffer('84 OP_INVERT')
+  evaluate(script, [], flags)
+  assert.strictEqual(script.toString('hex'), '018483')
+})

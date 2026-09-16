@@ -24,19 +24,65 @@ const { peephole } = require('./peephole')
 const pickOps = d => (d === 0 ? [{ code: OP.OP_DUP }] : d === 1 ? [{ code: OP.OP_OVER }] : [numOp(d), { code: OP.OP_PICK }])
 const rollOps = d => (d === 0 ? [] : d === 1 ? [{ code: OP.OP_SWAP }] : d === 2 ? [{ code: OP.OP_ROT }] : [numOp(d), { code: OP.OP_ROLL }])
 
+// Per value, the ordered timeline of uses (+1) and supplies (-1) still ahead:
+// operation inputs are uses, operation outputs (including values coming back
+// from the alt stack) are supplies, the final stack is uses. need(x) is how
+// many copies must be kept on the main stack right now so no future use
+// finds x missing: the largest excess of uses over supplies over any prefix
+// of the remaining timeline.
+class Liveness {
+  constructor (apps, needed, F) {
+    const deltas = new Map()
+    const add = (x, d) => { let a = deltas.get(x); if (!a) deltas.set(x, a = []); a.push(d) }
+    for (let j = 0; j < apps.length; j++) {
+      if (!needed[j]) continue
+      for (const x of apps[j].inputs) add(x, 1)
+      for (const o of apps[j].outputs) add(o, -1)
+    }
+    for (const x of F) add(x, 1)
+    this.tl = new Map()
+    for (const [x, ds] of deltas) {
+      const m = ds.length
+      const P = new Int32Array(m + 1)
+      for (let i = 0; i < m; i++) P[i + 1] = P[i] + ds[i]
+      const suf = new Int32Array(m + 2)
+      suf[m + 1] = -0x7fffffff
+      for (let i = m; i >= 0; i--) suf[i] = Math.max(P[i], suf[i + 1])
+      this.tl.set(x, { P, suf })
+    }
+    this.ptr = new Map()
+  }
+
+  need (x, ahead = 0) {
+    const t = this.tl.get(x)
+    if (!t) return 0
+    const p = (this.ptr.get(x) || 0) + ahead
+    if (p >= t.P.length - 1) return 0
+    return Math.max(0, t.suf[p + 1] - t.P[p])
+  }
+
+  advance (x) { this.ptr.set(x, (this.ptr.get(x) || 0) + 1) }
+
+  clone () {
+    const c = Object.create(Liveness.prototype)
+    c.tl = this.tl
+    c.ptr = new Map(this.ptr)
+    return c
+  }
+}
+
 class Machine {
-  constructor (I, S, pending) {
+  constructor (I, S, live) {
     this.I = I
     this.S = S
-    this.pending = pending
+    this.live = live
     this.cnt = new Map()
     for (const x of S) this.cnt.set(x, (this.cnt.get(x) || 0) + 1)
     this.out = []
   }
 
   clone () {
-    const m = new Machine(this.I, this.S.slice(), new Map(this.pending))
-    return m
+    return new Machine(this.I, this.S.slice(), this.live.clone())
   }
 
   cheap (id) { return this.I.isConst(id) && pushCost(this.I.constBuf(id)) <= 2 }
@@ -44,14 +90,14 @@ class Machine {
   push (id) { this.S.push(id); this.cnt.set(id, this.count(id) + 1) }
   removeAt (q) { const id = this.S.splice(q, 1)[0]; this.cnt.set(id, this.count(id) - 1); return id }
   emit (ops) { for (const o of ops) this.out.push(o) }
-  excess (id) { return this.count(id) > (this.pending.get(id) || 0) }
+  excess (id) { return this.count(id) > this.live.need(id) }
 
-  stage (order, passthrough) {
+  stage (order) {
     let staged = 0
     const S = this.S
     for (const x of order) {
-      const pend = (this.pending.get(x) || 0) - 1
-      this.pending.set(x, pend)
+      this.live.advance(x)
+      const need = this.live.need(x)
       if (this.cheap(x)) {
         this.emit([pushOp(this.I.constBuf(x))])
         this.push(x)
@@ -71,7 +117,7 @@ class Machine {
       for (let q = S.length - staged; q < S.length; q++) if (S[q] === x) inStaged++
       const copies = this.count(x) - inStaged
       const d = S.length - 1 - p
-      if (copies - 1 + (passthrough ? 1 : 0) >= pend) {
+      if (copies - 1 >= need) {
         let trivial = true
         for (let q = p + 1; q < S.length && trivial; q++) trivial = S[q] === x
         if (!trivial) {
@@ -88,16 +134,16 @@ class Machine {
   }
 
   // Byte cost of stage(order) without performing it.
-  stageCost (order, passthrough) {
+  stageCost (order) {
     const S = this.S
     const removed = new Set()
     const staged = []
-    const pendDelta = new Map()
+    const ahead = new Map()
     const removedOf = new Map()
     let cost = 0
     for (const x of order) {
-      const pend = (this.pending.get(x) || 0) + (pendDelta.get(x) || 0) - 1
-      pendDelta.set(x, (pendDelta.get(x) || 0) - 1)
+      ahead.set(x, (ahead.get(x) || 0) + 1)
+      const need = this.live.need(x, ahead.get(x))
       if (this.cheap(x)) { cost += pushCost(this.I.constBuf(x)); staged.push(x); continue }
       let p = -1
       let above = 0
@@ -109,7 +155,7 @@ class Machine {
       if (p < 0) { cost += pushCost(this.I.constBuf(x)); staged.push(x); continue }
       const d = above + staged.length
       const copies = this.count(x) - (removedOf.get(x) || 0)
-      if (copies - 1 + (passthrough ? 1 : 0) >= pend) {
+      if (copies - 1 >= need) {
         let trivial = above === 0
         for (const y of staged) trivial = trivial && y === x
         if (!trivial) cost += opsSize(rollOps(d))
@@ -136,19 +182,19 @@ class Machine {
     let order = app.inputs
     if (app.comm && app.inputs.length === 2 && app.inputs[0] !== app.inputs[1]) {
       const alt = [app.inputs[1], app.inputs[0]]
-      if (this.stageCost(alt, app.passthrough) < this.stageCost(order, app.passthrough)) order = alt
+      if (this.stageCost(alt) < this.stageCost(order)) order = alt
     }
     // Large constants with more than one remaining use are pushed once, before
     // staging, so later uses can copy them.
     for (const x of new Set(order)) {
-      if (this.I.isConst(x) && !this.cheap(x) && this.count(x) === 0 && (this.pending.get(x) || 0) > 1) {
+      if (this.I.isConst(x) && !this.cheap(x) && this.count(x) === 0 && this.live.need(x) > 1) {
         this.emit([pushOp(this.I.constBuf(x))])
         this.push(x)
       }
     }
-    this.stage(order, app.passthrough)
+    this.stage(order)
     for (let j = 0; j < app.inputs.length; j++) this.removeAt(this.S.length - 1)
-    for (const o of app.outputs) this.push(o)
+    for (const o of app.outputs) { this.push(o); this.live.advance(o) }
     this.emit([{ code: app.code }])
     this.cleanup()
   }
@@ -226,7 +272,7 @@ class Machine {
 function rescheduleFragment (ops, g, ga, opts = {}) {
   const I = new Interner()
   const st = run(ops, I, Object.assign({}, opts, { record: true }))
-  if (!st || st.usedAlt) return null
+  if (!st) return null
   const F = st.main
   const apps = st.apps
 
@@ -237,7 +283,7 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
   for (let j = apps.length - 1; j >= 0; j--) {
     const a = apps[j]
     const used = a.outputs.some((o, idx) => !(a.passthrough && idx === 0) && (uses.get(o) || 0) > 0)
-    if (a.event || used) {
+    if (a.event || a.pinned || used) {
       needed[j] = true
       for (const x of a.inputs) inc(x)
     }
@@ -245,7 +291,7 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
 
   const S = []
   for (let i = st.D - 1; i >= 0; i--) S.push(I.input(i))
-  const mach = new Machine(I, S, uses)
+  const mach = new Machine(I, S, new Liveness(apps, needed, F))
   try {
     mach.cleanup()
     for (let j = 0; j < apps.length; j++) if (needed[j]) mach.apply(apps[j])

@@ -22,48 +22,31 @@ function tableFor (cost) {
   return tables.get(cost)
 }
 
-function isAltOp (op) {
-  return op.code === OP.OP_TOALTSTACK || op.code === OP.OP_FROMALTSTACK
-}
-
 function schedulePass (ops, g, ga, cfg) {
   const { hm, ha } = heights(ops, g, ga, cfg)
-  const out = []
-  const rewrites = []
-  let a = 0
-  while (a < ops.length) {
-    if (isAltOp(ops[a])) { out.push(ops[a++]); continue }
-    let b = a
-    while (b < ops.length && !isAltOp(ops[b])) b++
-    const seg = ops.slice(a, b)
-    let best = seg
-    let bestLog = []
-    if (seg.length >= 3) {
-      for (const K of cfg.chunks) {
-        const cand = []
-        const log = []
-        let pos = 0
-        while (pos < seg.length) {
-          let end = Math.min(seg.length, pos + K)
-          while (end < seg.length && isPush(seg[end - 1])) end++
-          const chunk = seg.slice(pos, end)
-          const r = chunk.length >= 3 ? rescheduleFragment(chunk, hm[a + pos], ha[a + pos], cfg) : null
-          if (r && opsSize(r) < opsSize(chunk)) {
-            cand.push(...r)
-            log.push({ pass: 'stack-scheduling', index: a + pos, before: chunk, after: r, saved: opsSize(chunk) - opsSize(r) })
-          } else {
-            cand.push(...chunk)
-          }
-          pos = end
-        }
-        if (opsSize(cand) < opsSize(best)) { best = cand; bestLog = log }
+  let best = ops
+  let bestLog = []
+  if (ops.length < 3) return { ops, rewrites: [] }
+  for (const K of cfg.chunks) {
+    const cand = []
+    const log = []
+    let pos = 0
+    while (pos < ops.length) {
+      let end = Math.min(ops.length, pos + K)
+      while (end < ops.length && isPush(ops[end - 1])) end++
+      const chunk = ops.slice(pos, end)
+      const r = chunk.length >= 3 ? rescheduleFragment(chunk, hm[pos], ha[pos], cfg) : null
+      if (r && opsSize(r) < opsSize(chunk)) {
+        cand.push(...r)
+        log.push({ pass: 'stack-scheduling', index: pos, before: chunk, after: r, saved: opsSize(chunk) - opsSize(r) })
+      } else {
+        cand.push(...chunk)
       }
+      pos = end
     }
-    out.push(...best)
-    rewrites.push(...bestLog)
-    a = b
+    if (opsSize(cand) < opsSize(best)) { best = cand; bestLog = log }
   }
-  return { ops: out, rewrites }
+  return { ops: best, rewrites: bestLog }
 }
 
 function optimizeRegion (ops, g, ga, cache, cfg) {

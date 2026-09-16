@@ -50,6 +50,11 @@ function show (b) {
 }
 
 function evaluate (scriptBuf, stack, flags) {
+  // The interpreter pushes the shared Interpreter.true/false buffers, and its
+  // in-place bitwise ops can corrupt them for every later evaluation in the
+  // process. Reset them so one run cannot affect the next.
+  Interpreter.true = Buffer.from([1])
+  Interpreter.false = Buffer.alloc(0)
   const interp = new Interpreter()
   let script
   try {

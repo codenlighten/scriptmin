@@ -247,8 +247,24 @@ class SymState {
       case OP.OP_2OVER: { this.ensure(4); const s = this.main; s.push(s[s.length - 4], s[s.length - 3]); return }
       case OP.OP_2ROT: { this.ensure(6); const s = this.main; s.push(...s.splice(s.length - 6, 2)); return }
       case OP.OP_2SWAP: { this.ensure(4); const s = this.main; s.push(...s.splice(s.length - 4, 2)); return }
-      case OP.OP_TOALTSTACK: this.ensure(1); this.alt.push(this.main.pop()); this.usedAlt = true; return
-      case OP.OP_FROMALTSTACK: this.ensureAlt(1); this.main.push(this.alt.pop()); this.usedAlt = true; return
+      case OP.OP_TOALTSTACK: {
+        this.ensure(1)
+        const v = this.main.pop()
+        this.alt.push(v)
+        this.usedAlt = true
+        // Alt-stack moves are recorded in order and replayed in order, so the
+        // alt stack's contents never depend on how the main stack is scheduled.
+        if (this.apps) this.apps.push({ code, inputs: [v], outputs: [], event: false, pinned: true, comm: false, passthrough: false })
+        return
+      }
+      case OP.OP_FROMALTSTACK: {
+        this.ensureAlt(1)
+        const v = this.alt.pop()
+        this.main.push(v)
+        this.usedAlt = true
+        if (this.apps) this.apps.push({ code, inputs: [], outputs: [v], event: false, pinned: true, comm: false, passthrough: false })
+        return
+      }
       case OP.OP_PICK:
       case OP.OP_ROLL: {
         const n = Number(decodeNum(this.I.constBuf(m.pop()), 4))
