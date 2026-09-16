@@ -14,14 +14,15 @@ const bsv = require('@smartledger/bsv')
 const sizes = (process.argv[2] || '50,500,2000,10000').split(',').map(Number)
 const effort = process.argv[3] || 'medium'
 const modulus = process.argv[4] || 'push'
+const lastUse = process.argv[5] === 'lastuse'
 const flags = bsv.Script.Interpreter.currentConsensusFlags()
 const fmt = n => n.toLocaleString('en-US')
 
-console.log(`effort=${effort} modulus=${modulus}`)
+console.log(`effort=${effort} modulus=${modulus} lastUse=${lastUse}`)
 console.log('gates      original     optimized      saved   reduction    time   interpreter check')
 for (const gates of sizes) {
   const c = randomCircuit({ gates, seed: gates })
-  const script = compileNaive(c, { modulus })
+  const script = compileNaive(c, { modulus, lastUse })
   const res = optimize(script, { effort, differential: 0 })
   let checks = 0
   for (let t = 0; t < 3; t++) {

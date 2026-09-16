@@ -24,7 +24,7 @@ function rng (seed) {
   }
 }
 
-// circuit: { inputs, gates: [{ op: 'mul'|'add'|'sub', a, b }], outputs: [value index] }
+// circuit: { inputs, gates: [{ op: 'mul'|'add'|'sub', a, b } | { op: 'mulc', a, k }], outputs: [value index] }
 // Values are numbered: 0..inputs-1 are inputs, inputs+i is gate i.
 function randomCircuit ({ inputs = 8, gates = 200, outputs = 4, seed = 1 } = {}) {
   const r = rng(seed)
@@ -43,7 +43,9 @@ function randomCircuit ({ inputs = 8, gates = 200, outputs = 4, seed = 1 } = {})
 
 // modulus: 'push' re-pushes the 33-byte modulus at every reduction;
 //          'pick' pushes it once and fetches it with OP_PICK like any value.
-function compileNaive (c, { modulus = 'push' } = {}) {
+// lastUse: fetch an operand with OP_ROLL instead of OP_PICK when this is its
+//          last use, so dead values never pile up (a much better baseline).
+function compileNaive (c, { modulus = 'push', lastUse = false } = {}) {
   const ops = []
   const stack = [] // value index per stack slot, bottom first
   for (let i = 0; i < c.inputs; i++) stack.push(i)
@@ -61,11 +63,29 @@ function compileNaive (c, { modulus = 'push' } = {}) {
     return [numOp(depthOf(MOD) + 1), { code: OP.OP_PICK }]
   }
 
+  const last = new Map()
+  c.gates.forEach((g, i) => { last.set(g.a, i); if (g.b !== undefined) last.set(g.b, i) })
+  for (const o of c.outputs) last.set(o, Infinity)
+  // Fetch value v to the top; `above` counts operands already fetched.
+  const fetch = (v, i, above, final) => {
+    const d = depthOf(v) + above
+    if (lastUse && final && last.get(v) === i) {
+      ops.push(numOp(d), { code: OP.OP_ROLL })
+      stack.splice(stack.lastIndexOf(v), 1)
+    } else {
+      ops.push(numOp(d), { code: OP.OP_PICK })
+    }
+  }
+
   c.gates.forEach((g, i) => {
-    ops.push(numOp(depthOf(g.a)), { code: OP.OP_PICK })
-    stack.push(-1)
-    ops.push(numOp(depthOf(g.b)), { code: OP.OP_PICK })
-    stack.pop()
+    if (g.op === 'mulc') {
+      fetch(g.a, i, 0, true)
+      ops.push(pushOp(encodeNum(g.k)), { code: OP.OP_MUL }, ...modulusOps(), { code: OP.OP_MOD })
+      stack.push(c.inputs + i)
+      return
+    }
+    fetch(g.a, i, 0, g.a !== g.b)
+    fetch(g.b, i, 1, true)
     if (g.op === 'mul') ops.push({ code: OP.OP_MUL }, ...modulusOps(), { code: OP.OP_MOD })
     if (g.op === 'add') ops.push({ code: OP.OP_ADD }, ...modulusOps(), { code: OP.OP_MOD })
     if (g.op === 'sub') ops.push({ code: OP.OP_SUB }, ...modulusOps(), { code: OP.OP_ADD }, ...modulusOps(), { code: OP.OP_MOD })
@@ -96,6 +116,7 @@ function evaluateCircuit (c, inputs) {
     if (g.op === 'mul') vals.push((a * b) % P)
     if (g.op === 'add') vals.push((a + b) % P)
     if (g.op === 'sub') vals.push((((a - b) + P) % P))
+    if (g.op === 'mulc') vals.push((a * BigInt(g.k)) % P)
   }
   return c.outputs.map(o => vals[o])
 }

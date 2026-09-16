@@ -182,3 +182,20 @@ test('computes repeated expressions once', () => {
   // Different checks must all survive.
   assert.match(asm(opt('OP_OVER OP_OVER OP_ADD OP_VERIFY OP_SUB OP_VERIFY')), /OP_ADD.*OP_SUB/)
 })
+
+test('Fp12 tower multiplication: smaller than a last-use compiler and still correct', () => {
+  const crypto = require('crypto')
+  const { evaluate } = require('../src/verify')
+  const { compileNaive: compile, evaluateCircuit, P } = require('../examples/naive-field-compiler')
+  const { millerLikeCircuit } = require('../examples/tower-circuit')
+  const flags = require('@smartledger/bsv').Script.Interpreter.currentConsensusFlags()
+  const c = millerLikeCircuit(1)
+  const script = compile(c, { modulus: 'pick', lastUse: true })
+  const r = optimize(script, { differential: 0 })
+  assert.ok(r.report.saved > script.length * 0.25, `saved only ${r.report.saved} of ${script.length}`)
+  const inputs = Array.from({ length: c.inputs }, () => BigInt('0x' + crypto.randomBytes(32).toString('hex')) % P)
+  const expected = evaluateCircuit(c, inputs).map(v => encodeNum(v).toString('hex'))
+  const out = evaluate(r.script, inputs.map(encodeNum), flags)
+  assert.ok(out.ok, out.err)
+  assert.deepStrictEqual(out.stack, expected)
+})

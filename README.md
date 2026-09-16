@@ -187,28 +187,47 @@ differential(a, b, { runs: 500 })  // { ok, runs, succeeded } or a counterexampl
 
 ## Benchmarks
 
-`examples/naive-field-compiler.js` compiles random modular-arithmetic circuits
-(254-bit modulus) the way a first-cut generator would. Every operand is fetched
-with `OP_PICK`, nothing is freed until the end, and a final cleanup rolls and
-drops every temporary. `examples/bench.js` optimizes the output, checks the
-proof, and runs both scripts on the interpreter with real field elements
-against the circuit's expected outputs.
+Two circuit generators compile modular arithmetic over a 254-bit modulus into
+Script. Each benchmark optimizes the output, checks the symbolic proof, and
+runs both scripts on the interpreter with random field elements, comparing
+against the circuit's exact results.
 
-Modulus kept on the stack and fetched with `OP_PICK` (`npm run bench`):
+- `examples/tower-circuit.js`: Fp2 → Fp6 → Fp12 tower multiplication from
+  textbook formulas, chained as `f ← f² · g` like a Miller loop.
+- `examples/naive-field-compiler.js`: random circuits, plus the compiler
+  both benchmarks use. By default it fetches every operand with `OP_PICK`
+  and cleans up at the end. With `lastUse` it already `OP_ROLL`s each value
+  at its last use, which is a much stronger baseline.
 
-| gates | original | optimized | reduction | time |
-| ---: | ---: | ---: | ---: | ---: |
-| 50 | 690 | 451 | 34.6% | 0.2s |
-| 500 | 7,433 | 4,571 | 38.5% | 0.3s |
-| 2,000 | 30,528 | 18,852 | 38.3% | 0.9s |
-| 6,000 | 93,167 | 58,612 | 37.1% | 3.2s |
-| 25,000 | 388,659 | 246,244 | 36.6% | 16.6s |
+Fp12 tower chains (`node examples/bench-tower.js 1,4 medium lastuse`):
 
-When the compiler also re-pushes the 33-byte modulus at every reduction
-(`node examples/bench.js 50,500,2000,6000 medium push`), a 312 KB script
-drops to 59 KB. The optimizer converges to the same output from both versions.
+| steps | gates | baseline | original | optimized | reduction |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 1 | 624 | PICK everything | 9,530 | 3,863 | 59.5% |
+| 1 | 624 | ROLL at last use | 6,178 | 3,863 | 37.5% |
+| 4 | 2,496 | PICK everything | 38,516 | 15,383 | 60.1% |
+| 4 | 2,496 | ROLL at last use | 24,844 | 15,383 | 38.1% |
 
-These are synthetic and deliberately naive. Hand-tuned scripts will save less.
+Random circuits, modulus fetched with `OP_PICK` (`npm run bench`):
+
+| gates | baseline | original | optimized | reduction | time |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 500 | PICK everything | 7,433 | 4,571 | 38.5% | 0.3s |
+| 500 | ROLL at last use | 5,582 | 4,544 | 18.6% | |
+| 6,000 | PICK everything | 93,167 | 58,612 | 37.1% | 3.2s |
+| 6,000 | ROLL at last use | 77,714 | 58,481 | 24.7% | |
+| 25,000 | PICK everything | 388,659 | 246,244 | 36.6% | 16.6s |
+
+Both baselines optimize to essentially the same bytes: the scheduler rebuilds
+the stack choreography from the dataflow, so the compiler's own choices
+barely matter.
+
+When the compiler re-pushes the 33-byte modulus at every reduction instead of
+fetching it (`node examples/bench.js 6000 medium push`), a 312 KB script drops
+to 59 KB.
+
+These are generated benchmarks. Hand-tuned scripts will save less. Times were
+taken on a desktop machine and vary with load.
 
 ## Layout
 
