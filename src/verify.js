@@ -50,15 +50,16 @@ function show (b) {
 }
 
 function evaluate (scriptBuf, stack, flags) {
-  // The interpreter pushes the shared Interpreter.true/false buffers, and its
-  // in-place bitwise ops can corrupt them for every later evaluation in the
-  // process. Reset them so one run cannot affect the next.
+  // Before @smartledger/bsv 9.10.1 the interpreter's bitwise ops wrote into
+  // their operands, which could corrupt the shared Interpreter.true/false for
+  // every later evaluation in the process. Reset them so one run cannot affect
+  // the next, whatever version a host project has installed.
   Interpreter.true = Buffer.from([1])
   Interpreter.false = Buffer.alloc(0)
   const interp = new Interpreter()
   let script
   try {
-    // A private copy: the interpreter's OP_INVERT/OP_AND/OP_OR/OP_XOR modify
+    // A private copy: before 9.10.1, OP_INVERT/OP_AND/OP_OR/OP_XOR modified
     // pushed data in place, and pushed data aliases the script's bytes.
     script = bsv.Script.fromBuffer(Buffer.from(scriptBuf))
   } catch (e) {
