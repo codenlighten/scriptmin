@@ -41,7 +41,8 @@ npm test
 npx scriptmin --help
 ```
 
-Requires Node 20.19+ (the version `@smartledger/bsv` needs).
+Requires Node 20.19+ (the version `@smartledger/bsv` needs). `@smartledger/bsv` is a
+peer dependency: a project that already uses it shares its copy.
 
 ## Command line
 

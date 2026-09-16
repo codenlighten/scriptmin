@@ -17,13 +17,16 @@
   ],
   "author": "codenlighten <greg@smartledger.technology>",
   "license": "MIT",
-  "dependencies": {
-    "@smartledger/bsv": "^9.10.0"
-  },
   "bin": {
     "scriptmin": "bin/scriptmin.js"
   },
   "engines": {
     "node": ">=20.19"
+  },
+  "peerDependencies": {
+    "@smartledger/bsv": "^9.10.0"
+  },
+  "devDependencies": {
+    "@smartledger/bsv": "^9.10.0"
   }
 }
