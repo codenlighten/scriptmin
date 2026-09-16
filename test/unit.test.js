@@ -116,7 +116,7 @@ test('the naive field compiler output shrinks and stays equivalent', () => {
   const script = compileNaive(c, { modulus: 'pick' })
   const r = optimize(script, { differential: 30 })
   assert.ok(r.report.verification.symbolic.ok)
-  assert.ok(r.report.saved > script.length * 0.15, `saved only ${r.report.saved} of ${script.length}`)
+  assert.ok(r.report.saved > script.length * 0.3, `saved only ${r.report.saved} of ${script.length}`)
   assert.ok(equivOps(parse(script), r.ops))
 })
 

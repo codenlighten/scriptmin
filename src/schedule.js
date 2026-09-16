@@ -179,6 +179,21 @@ class Machine {
   }
 
   apply (app) {
+    // Hoisting: a value that sits deep but is still needed several times is
+    // rolled to the top once, so its next uses are cheap shallow copies
+    // instead of repeated deep PICKs.
+    if (this.hoist) {
+      for (const x of new Set(app.inputs)) {
+        if (this.I.isConst(x) && this.cheap(x)) continue
+        if (this.live.need(x) < this.hoist.minUses) continue
+        let q = -1
+        for (let i = this.S.length - 1; i >= 0; i--) if (this.S[i] === x) { q = i; break }
+        if (q < 0 || this.S.length - 1 - q < this.hoist.minDepth) continue
+        this.emit(rollOps(this.S.length - 1 - q))
+        this.S.splice(q, 1)
+        this.S.push(x)
+      }
+    }
     let order = app.inputs
     if (app.comm && app.inputs.length === 2 && app.inputs[0] !== app.inputs[1]) {
       const alt = [app.inputs[1], app.inputs[0]]
@@ -268,7 +283,7 @@ class Machine {
   }
 }
 
-// Reschedules one fragment with no alt-stack use. Returns new ops or null.
+// Reschedules one fragment. Returns new ops or null.
 function rescheduleFragment (ops, g, ga, opts = {}) {
   const I = new Interner()
   const st = run(ops, I, Object.assign({}, opts, { record: true }))
@@ -289,23 +304,33 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
     }
   }
 
-  const S = []
-  for (let i = st.D - 1; i >= 0; i--) S.push(I.input(i))
-  const mach = new Machine(I, S, new Liveness(apps, needed, F))
-  try {
-    mach.cleanup()
-    for (let j = 0; j < apps.length; j++) if (needed[j]) mach.apply(apps[j])
-    mach.finish(F, opts)
-  } catch (e) {
-    // An inconsistency here means a missed case in the scheduler, never a
-    // wrong script: the fragment is simply left as it was.
-    if (opts.debug) throw e
-    return null
+  const S0 = []
+  for (let i = st.D - 1; i >= 0; i--) S0.push(I.input(i))
+  const live = new Liveness(apps, needed, F)
+  let best = null
+  for (const hoist of opts.hoistVariants || HOIST_VARIANTS) {
+    const mach = new Machine(I, S0.slice(), live.clone())
+    mach.hoist = hoist
+    try {
+      mach.cleanup()
+      for (let j = 0; j < apps.length; j++) if (needed[j]) mach.apply(apps[j])
+      mach.finish(F, opts)
+    } catch (e) {
+      // An inconsistency here means a missed case in the scheduler, never a
+      // wrong script: the fragment is simply left as it was.
+      if (opts.debug) throw e
+      continue
+    }
+    if (!best || opsSize(mach.out) < opsSize(best)) best = mach.out
   }
+  if (!best) return null
 
-  const out = peephole(mach.out, g, ga, opts).ops
+  const out = peephole(best, g, ga, opts).ops
   if (!equivalent(ops, out, g, ga, opts)) return null
   return out
 }
+
+// Scheduling is greedy, so it runs once per hoisting policy and keeps the smallest.
+const HOIST_VARIANTS = [null, { minUses: 3, minDepth: 17 }, { minUses: 6, minDepth: 17 }, { minUses: 10, minDepth: 17 }]
 
 module.exports = { rescheduleFragment }

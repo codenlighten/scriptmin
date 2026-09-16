@@ -9,21 +9,21 @@ bytes, `OP_2DUP` is one.
 ```
 $ scriptmin -o field-6000.min.hex field-6000.hex
 Original:         93,167 bytes
-Minimized:        72,926 bytes
-Saved:            20,241 bytes
-Reduction:        21.73%
+Minimized:        58,612 bytes
+Saved:            34,555 bytes
+Reduction:        37.09%
 
 Breakdown:
-  stack-scheduling            -18,890
-  peephole                     -1,101
-  superoptimizer                 -250
+  stack-scheduling            -33,229
+  peephole                     -1,095
+  superoptimizer                 -231
 
 By what the bytes were doing:
-  stack                        79,593 ->       59,352  (-20,241)
+  stack                        79,593 ->       45,038  (-34,555)
 
 Verification:
   symbolic proof         passed (1 regions, 0 barriers)
-  interpreter tests      passed (100 runs, 47 ran to success)
+  interpreter tests      passed (100 runs, 43 ran to success)
 ```
 
 Built on [`@smartledger/bsv`](https://www.npmjs.com/package/@smartledger/bsv)
@@ -96,7 +96,7 @@ Each region goes through these passes, repeated while they keep finding savings:
 | --- | --- |
 | **push-encoding** | Re-encodes non-minimal pushes (`OP_PUSHDATA1 01 05` becomes `OP_5`). |
 | **peephole** | Fixed rules: `OP_SWAP OP_ADD` becomes `OP_ADD`, `OP_EQUAL OP_VERIFY` becomes `OP_EQUALVERIFY`, `OP_1 OP_PICK` becomes `OP_OVER`, and so on. |
-| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. |
+| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. Deep values that are still needed several times (a field modulus, say) are rolled to the top once so later uses are shallow copies; the scheduler runs under several such policies and keeps the smallest result. |
 | **superoptimizer** | For every short window of pure stack code, computes the stack transformation and finds the cheapest sequence producing it. A table of every stack-op sequence up to 5 bytes (6 at `--effort high`) answers most windows instantly. An A\* search handles windows with constants or the alt stack. Non-overlapping replacements are chosen by dynamic programming. |
 | **constant-folding** | Superoptimizer windows over constant operands (`OP_3 OP_5 OP_ADD` becomes `OP_8`, including hashes, `CAT`, `SPLIT` and numeric comparisons). |
 
@@ -198,14 +198,14 @@ Modulus kept on the stack and fetched with `OP_PICK` (`npm run bench`):
 | gates | original | optimized | reduction | time |
 | ---: | ---: | ---: | ---: | ---: |
 | 50 | 690 | 451 | 34.6% | 0.2s |
-| 500 | 7,433 | 5,115 | 31.2% | 0.2s |
-| 2,000 | 30,528 | 23,232 | 23.9% | 0.8s |
-| 6,000 | 93,167 | 72,870 | 21.8% | 2.7s |
-| 25,000 | 388,659 | 306,954 | 21.0% | 12.0s |
+| 500 | 7,433 | 4,571 | 38.5% | 0.3s |
+| 2,000 | 30,528 | 18,852 | 38.3% | 0.9s |
+| 6,000 | 93,167 | 58,612 | 37.1% | 3.2s |
+| 25,000 | 388,659 | 246,244 | 36.6% | 16.6s |
 
 When the compiler also re-pushes the 33-byte modulus at every reduction
 (`node examples/bench.js 50,500,2000,6000 medium push`), a 312 KB script
-drops to 73 KB. The optimizer converges to the same output from both versions.
+drops to 59 KB. The optimizer converges to the same output from both versions.
 
 These are synthetic and deliberately naive. Hand-tuned scripts will save less.
 
