@@ -1,6 +1,6 @@
 # Real-world results: script-high-level-modules
 
-[script-high-level-modules](https://github.com/codenlighten) is a library of
+[script-high-level-modules](https://github.com/codenlighten/script-high-level-modules) is a library of
 BSV Script modules, from field arithmetic through a full BLS12-381 pairing and
 a Groth16 verifier. Its `pairing.miller(63)` ran on mainnet as a 333 KB locking
 script. The modules are already optimized by hand: lazy reduction, hoisted
