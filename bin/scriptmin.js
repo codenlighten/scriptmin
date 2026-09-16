@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+'use strict'
+
+const fs = require('fs')
+const path = require('path')
+const { optimize, profile, Cache, toAsm, toBuffer } = require('../src')
+const { parse } = require('../src/script')
+const { StackTable } = require('../src/superopt')
+const { EFFORT } = require('../src/optimize')
+
+const USAGE = `scriptmin — Bitcoin Script minimizer
+
+Usage:
+  scriptmin [options] <script-file | ->
+
+Input is hex, ASM (bsv format), or raw bytes (--binary). "-" reads stdin.
+
+Options:
+  -o, --out <file>        write the optimized script (hex, or ASM with --asm, raw with --binary)
+  --asm                   write ASM instead of hex
+  --binary                read and write raw bytes
+  --profile               print a byte profile of the input and exit
+  --explain               list every rewrite applied
+  --explain-limit <n>     rewrites to list (default 50, 0 = all)
+  --json                  print the report as JSON
+  --effort <level>        low | medium | high (default medium)
+  --db <file>             pattern database: load known solutions, save new ones
+  --tests <n>             differential interpreter runs (default 100, 0 = off)
+  --stacks <file>         JSON array of starting stacks (arrays of hex) to test against
+  --no-verify             skip the symbolic equivalence proof (not recommended)
+  --no-chronicle          treat Chronicle opcodes (OP_SUBSTR, OP_LEFT, ...) as barriers
+  -h, --help              show this help
+`
+
+function parseArgs (argv) {
+  const a = { effort: 'medium', explainLimit: 50, tests: 100 }
+  for (let i = 0; i < argv.length; i++) {
+    const x = argv[i]
+    const next = () => { if (i + 1 >= argv.length) die(`${x} needs a value`); return argv[++i] }
+    switch (x) {
+      case '-o': case '--out': a.out = next(); break
+      case '--asm': a.asm = true; break
+      case '--binary': a.binary = true; break
+      case '--profile': a.profile = true; break
+      case '--explain': a.explain = true; break
+      case '--explain-limit': a.explainLimit = Number(next()); break
+      case '--json': a.json = true; break
+      case '--effort': a.effort = next(); break
+      case '--db': a.db = next(); break
+      case '--tests': a.tests = Number(next()); break
+      case '--stacks': a.stacks = next(); break
+      case '--no-verify': a.verify = false; break
+      case '--no-chronicle': a.chronicle = false; break
+      case '-h': case '--help': process.stdout.write(USAGE); process.exit(0); break
+      default:
+        if (x.startsWith('-') && x !== '-') die(`unknown option ${x}`)
+        if (a.file) die('only one input file')
+        a.file = x
+    }
+  }
+  if (!a.file) { process.stdout.write(USAGE); process.exit(1) }
+  if (!EFFORT[a.effort]) die(`unknown effort "${a.effort}"`)
+  return a
+}
+
+function die (msg) {
+  process.stderr.write(`scriptmin: ${msg}\n`)
+  process.exit(2)
+}
+
+const fmt = n => n.toLocaleString('en-US')
+const clip = (text, ops, width = 150) => (text.length <= width ? text : `${text.slice(0, width)}… (${fmt(ops)} ops)`)
+const pad = (s, n) => String(s).padEnd(n)
+const lpad = (s, n) => String(s).padStart(n)
+
+function readInput (a) {
+  const raw = a.file === '-' ? fs.readFileSync(0) : fs.readFileSync(a.file)
+  if (a.binary) return raw
+  try {
+    return toBuffer(raw.toString('utf8'))
+  } catch (e) {
+    die(`could not parse input as hex or ASM: ${e.message}`)
+  }
+}
+
+function printProfile (p) {
+  const out = []
+  out.push(`${fmt(p.bytes)} bytes, ${fmt(p.ops)} ops`, '')
+  for (const c of p.categories) out.push(`  ${pad(c.name, 24)} ${lpad(fmt(c.bytes), 12)}  ${lpad(c.pct.toFixed(2), 6)}%`)
+  out.push('', 'Top opcodes by bytes:')
+  for (const o of p.opcodes.slice(0, 12)) out.push(`  ${pad(o.name, 24)} ${lpad(fmt(o.count), 10)} ops ${lpad(fmt(o.bytes), 12)} bytes`)
+  out.push('', 'PICK/ROLL depths (constant indices):')
+  out.push(`  ${pad('depth', 10)} ${lpad('PICK', 10)} ${lpad('ROLL', 10)}`)
+  p.depths.buckets.forEach((b, i) => out.push(`  ${pad(b, 10)} ${lpad(fmt(p.depths.PICK[i]), 10)} ${lpad(fmt(p.depths.ROLL[i]), 10)}`))
+  if (p.patterns.length) {
+    out.push('', 'Most expensive repeated patterns:')
+    for (const g of p.patterns) out.push(`  ${lpad(fmt(g.bytes), 10)} bytes ${lpad(fmt(g.count), 8)}x  ${g.pattern}`)
+  }
+  return out.join('\n') + '\n'
+}
+
+function printReport (r, a) {
+  const out = []
+  out.push(`Original:   ${lpad(fmt(r.original.bytes), 12)} bytes`)
+  out.push(`Minimized:  ${lpad(fmt(r.optimized.bytes), 12)} bytes`)
+  out.push(`Saved:      ${lpad(fmt(r.saved), 12)} bytes`)
+  out.push(`Reduction:  ${lpad(r.reductionPct.toFixed(2), 11)}%`)
+  if (r.passes.length) {
+    out.push('', 'Breakdown:')
+    for (const p of r.passes) out.push(`  ${pad(p.name, 22)} ${lpad('-' + fmt(p.saved), 12)}`)
+  }
+  const moved = r.byCategory.filter(c => c.saved !== 0)
+  if (moved.length) {
+    out.push('', 'By what the bytes were doing:')
+    for (const c of moved) out.push(`  ${pad(c.name, 22)} ${lpad(fmt(c.before), 12)} -> ${lpad(fmt(c.after), 12)}  (${c.saved > 0 ? '-' : '+'}${fmt(Math.abs(c.saved))})`)
+  }
+  const v = r.verification
+  out.push('', 'Verification:')
+  out.push(`  symbolic proof         ${v.symbolic ? (v.symbolic.ok ? `passed (${v.symbolic.regions} regions, ${v.symbolic.barriers} barriers)` : 'FAILED') : 'skipped'}`)
+  out.push(`  interpreter tests      ${v.differential ? `passed (${v.differential.runs} runs, ${v.differential.succeeded} ran to success)` : 'skipped'}`)
+  if (r.reverted) out.push(`  note: ${r.reverted} region(s) left unoptimized after a failed local check`)
+  for (const w of r.warnings) out.push('', 'Warning: ' + w)
+  if (a.explain) {
+    out.push('', 'Rewrites:')
+    const list = r.rewrites.slice().sort((x, y) => y.saved - x.saved)
+    const shown = a.explainLimit ? list.slice(0, a.explainLimit) : list
+    for (const rw of shown) {
+      out.push(`  [${rw.pass}${rw.rule ? ': ' + rw.rule : ''}] -${rw.saved} bytes (region @${rw.regionOffset ?? 0})`)
+      out.push(`      ${clip(toAsm(rw.before, { maxData: 8 }), rw.before.length)}`)
+      out.push(`   => ${clip(toAsm(rw.after, { maxData: 8 }), rw.after.length) || '(nothing)'}`)
+    }
+    if (shown.length < list.length) out.push(`  ... ${list.length - shown.length} more (--explain-limit 0 for all)`)
+  }
+  out.push('', `(${r.ms} ms)`)
+  return out.join('\n') + '\n'
+}
+
+function main () {
+  const a = parseArgs(process.argv.slice(2))
+  const buf = readInput(a)
+
+  if (a.profile) {
+    const p = profile(buf)
+    process.stdout.write(a.json ? JSON.stringify(p, null, 2) + '\n' : printProfile(p))
+    return
+  }
+
+  let cache
+  if (a.db) {
+    let entries
+    if (fs.existsSync(a.db)) {
+      const j = JSON.parse(fs.readFileSync(a.db, 'utf8'))
+      if (j.version !== 1) die(`unsupported pattern database version in ${a.db}`)
+      entries = j.entries
+    }
+    cache = new Cache({ entries, table: new StackTable({ maxCost: EFFORT[a.effort].tableCost }) })
+  }
+
+  let stacks = []
+  if (a.stacks) stacks = JSON.parse(fs.readFileSync(a.stacks, 'utf8')).map(s => s.map(h => Buffer.from(h, 'hex')))
+
+  let res
+  try {
+    res = optimize(buf, {
+      effort: a.effort,
+      cache,
+      verify: a.verify,
+      chronicle: a.chronicle,
+      differential: a.tests,
+      stacks
+    })
+  } catch (e) {
+    process.stderr.write(`scriptmin: ${e.message}\n`)
+    if (e.proof) process.stderr.write(JSON.stringify(e.proof, null, 2) + '\n')
+    if (e.diff) process.stderr.write(JSON.stringify(e.diff, null, 2) + '\n')
+    process.exit(3)
+  }
+
+  if (a.db && cache) fs.writeFileSync(a.db, JSON.stringify(cache.toJSON()))
+
+  if (a.out) {
+    const data = a.binary ? res.script : a.asm ? toAsm(parse(res.script)) + '\n' : res.script.toString('hex') + '\n'
+    fs.mkdirSync(path.dirname(path.resolve(a.out)), { recursive: true })
+    fs.writeFileSync(a.out, data)
+  }
+
+  if (a.json) {
+    const r = Object.assign({}, res.report, {
+      rewrites: res.report.rewrites.map(rw => Object.assign({}, rw, { before: toAsm(rw.before), after: toAsm(rw.after) })),
+      script: res.script.toString('hex')
+    })
+    process.stdout.write(JSON.stringify(r, null, 2) + '\n')
+  } else {
+    process.stdout.write(printReport(res.report, a))
+    if (!a.out) process.stdout.write('\n' + res.script.toString('hex') + '\n')
+  }
+}
+
+main()

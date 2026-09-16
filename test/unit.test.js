@@ -1,0 +1,157 @@
+'use strict'
+
+const test = require('node:test')
+const assert = require('node:assert')
+const path = require('path')
+const { execFileSync } = require('child_process')
+const { optimize, profile, Cache, toAsm, equivalent, proveEquivalent } = require('../src')
+const { parse, encode, toBuffer, OP } = require('../src/script')
+const { decodeNum, encodeNum } = require('../src/num')
+const { StackTable } = require('../src/superopt')
+const { equivalent: equivOps } = require('../src/symbolic')
+const { randomCircuit, compileNaive } = require('../examples/naive-field-compiler')
+
+const asm = r => toAsm(r.ops)
+const opt = (s, o) => optimize(s, Object.assign({ differential: 50 }, o))
+
+test('script numbers round-trip and reject non-minimal encodings', () => {
+  for (const n of [0n, 1n, -1n, 127n, 128n, -128n, 255n, 256n, -255n, 2147483647n, -2147483647n]) {
+    assert.strictEqual(decodeNum(encodeNum(n)), n)
+  }
+  assert.strictEqual(decodeNum(Buffer.from([0x00])), null)
+  assert.strictEqual(decodeNum(Buffer.from([0x80])), null)
+  assert.strictEqual(decodeNum(Buffer.from([0x05, 0x00])), null)
+  assert.strictEqual(decodeNum(Buffer.from([0xff, 0x00])), 255n)
+})
+
+test('parse/encode round-trips every push form and keeps data after OP_RETURN verbatim', () => {
+  const hex = '00' + '0102' + '4c03aabbcc' + '4d0200ddee' + '4e01000000ff' + '76' + '6a' + '4c' // truncated push after RETURN
+  const buf = Buffer.from(hex, 'hex')
+  const ops = parse(buf)
+  assert.strictEqual(encode(ops).toString('hex'), hex)
+  assert.strictEqual(ops[ops.length - 1].code, -1)
+})
+
+test('does not remove an op whose only effect is failing on a short stack', () => {
+  assert.strictEqual(asm(opt('OP_DUP OP_DROP OP_1')), 'OP_DUP OP_DROP OP_1')
+  assert.strictEqual(asm(opt('OP_1 OP_DUP OP_DROP')), 'OP_1')
+  // Inside a branch the condition was consumed, so nothing is known to be left.
+  assert.strictEqual(asm(opt('OP_IF OP_DUP OP_DROP OP_ENDIF OP_1')), 'OP_IF OP_DUP OP_DROP OP_ENDIF OP_1')
+  assert.strictEqual(asm(opt('OP_2 OP_IF OP_DUP OP_DROP OP_ENDIF')), 'OP_2 OP_IF OP_DUP OP_DROP OP_ENDIF')
+  assert.strictEqual(asm(opt('OP_2 OP_3 OP_IF OP_DUP OP_DROP OP_ENDIF')), 'OP_2 OP_3 OP_IF OP_ENDIF')
+})
+
+test('folds constants, including through verification', () => {
+  assert.strictEqual(asm(opt('OP_3 OP_5 OP_ADD')), 'OP_8')
+  assert.strictEqual(asm(opt('OP_DUP OP_3 OP_5 OP_ADD OP_8 OP_NUMEQUALVERIFY')), 'OP_DUP')
+  // Division by zero always fails: it must stay.
+  assert.match(asm(opt('OP_1 OP_1 OP_0 OP_DIV')), /OP_DIV/)
+})
+
+test('finds shorter stack sequences', () => {
+  assert.strictEqual(asm(opt('OP_1 OP_PICK OP_1 OP_PICK')), 'OP_2DUP')
+  assert.strictEqual(asm(opt('OP_3 OP_PICK OP_3 OP_PICK')), 'OP_2OVER')
+  assert.strictEqual(asm(opt('OP_SWAP OP_ADD')), 'OP_ADD')
+  assert.strictEqual(asm(opt('OP_SWAP OP_SUB')), 'OP_SWAP OP_SUB')
+  assert.strictEqual(asm(opt('OP_EQUAL OP_VERIFY')), 'OP_EQUALVERIFY')
+  assert.strictEqual(asm(opt('OP_1 OP_ADD')), 'OP_1ADD')
+  assert.strictEqual(asm(opt('OP_TOALTSTACK OP_FROMALTSTACK')), 'OP_TOALTSTACK OP_FROMALTSTACK')
+  assert.strictEqual(asm(opt('OP_1 OP_TOALTSTACK OP_FROMALTSTACK')), 'OP_1')
+})
+
+test('moves values at their last use instead of copying and dropping', () => {
+  // [a b c] -> a*b, keeping nothing else.
+  const r = opt('OP_2 OP_PICK OP_2 OP_PICK OP_MUL OP_3 OP_ROLL OP_DROP OP_2 OP_ROLL OP_DROP OP_NIP')
+  assert.strictEqual(asm(r), 'OP_DROP OP_MUL')
+})
+
+test('removes unused results of operations that cannot fail, keeps ones that can', () => {
+  assert.strictEqual(asm(opt('OP_7 OP_DUP OP_SHA256 OP_DROP')), 'OP_7')
+  assert.strictEqual(asm(opt('OP_7 OP_DUP OP_SIZE OP_NIP OP_DROP')), 'OP_7')
+  // With nothing known about the stack, the underflow check has to survive.
+  assert.strictEqual(asm(opt('OP_DUP OP_SHA256 OP_DROP')), 'OP_DUP OP_DROP')
+  assert.match(asm(opt('OP_7 OP_2DUP OP_ADD OP_DROP')), /OP_ADD/)
+})
+
+test('never touches barriers', () => {
+  const s = 'OP_DUP OP_DROP OP_DEPTH OP_2 OP_CHECKMULTISIG OP_CODESEPARATOR OP_1 OP_DROP'
+  const r = opt(s)
+  assert.match(asm(r), /OP_DEPTH OP_2 OP_CHECKMULTISIG OP_CODESEPARATOR/)
+})
+
+test('equivalence checker', () => {
+  assert.ok(equivalent('OP_OVER OP_OVER', 'OP_2DUP'))
+  assert.ok(!equivalent('OP_SWAP OP_SUB', 'OP_SUB'))
+  assert.ok(!equivalent('OP_DUP OP_DROP', ''))
+  assert.ok(equivalent('OP_DUP OP_DROP', '', 1))
+  assert.ok(equivalent('OP_ADD OP_VERIFY OP_MUL OP_VERIFY', 'OP_ROT OP_ROT OP_ADD OP_VERIFY OP_MUL OP_VERIFY') === false)
+  const proof = proveEquivalent('OP_IF OP_1 OP_ELSE OP_2 OP_ENDIF', 'OP_IF OP_2 OP_ELSE OP_1 OP_ENDIF')
+  assert.ok(!proof.ok)
+})
+
+test('entries of the exhaustive table replay to the stacks they are filed under', () => {
+  const t = new StackTable({ maxCost: 4 })
+  const I = []
+  let n = 0
+  for (const [key, e] of t.map) {
+    if (n++ % 7 !== 0) continue
+    const ops = []
+    for (const mi of e.seq) ops.push(...t.moves[mi].ops)
+    I.push([key, ops])
+  }
+  for (const [key, ops] of I) {
+    const [target] = key.split('|')
+    const want = target ? target.split(',').map(Number) : []
+    const sim = require('../src/symbolic')
+    const Int = new sim.Interner()
+    const st = new sim.SymState(Int)
+    st.ensure(6)
+    for (const o of ops) assert.ok(st.step(o))
+    assert.deepStrictEqual(st.main.map(id => Int.info[id].index), want, key)
+  }
+})
+
+test('the naive field compiler output shrinks and stays equivalent', () => {
+  const c = randomCircuit({ gates: 120, seed: 7 })
+  const script = compileNaive(c, { modulus: 'pick' })
+  const r = optimize(script, { differential: 30 })
+  assert.ok(r.report.verification.symbolic.ok)
+  assert.ok(r.report.saved > script.length * 0.15, `saved only ${r.report.saved} of ${script.length}`)
+  assert.ok(equivOps(parse(script), r.ops))
+})
+
+test('pattern database round-trips through JSON', () => {
+  const cache = new Cache({ table: new StackTable({ maxCost: 4 }) })
+  optimize('OP_1 OP_PICK OP_1 OP_PICK OP_ADD OP_3 OP_5 OP_ADD', { cache, differential: 0 })
+  const json = JSON.parse(JSON.stringify(cache.toJSON()))
+  const again = new Cache({ entries: json.entries, table: new StackTable({ maxCost: 4 }) })
+  const r = optimize('OP_1 OP_PICK OP_1 OP_PICK OP_ADD OP_3 OP_5 OP_ADD', { cache: again, differential: 0 })
+  assert.ok(again.hits > 0)
+  assert.strictEqual(asm(r), 'OP_2DUP OP_ADD OP_8')
+})
+
+test('profile accounts for every byte', () => {
+  const buf = toBuffer('OP_5 OP_PICK OP_3 OP_ROLL OP_MUL 0102030405060708 OP_ADD OP_SHA256 OP_EQUALVERIFY OP_IF OP_ENDIF')
+  const p = profile(buf)
+  assert.strictEqual(p.categories.reduce((n, c) => n + c.bytes, 0), buf.length)
+  assert.deepStrictEqual(p.depths.PICK, [0, 1, 0, 0, 0])
+  assert.deepStrictEqual(p.depths.ROLL, [1, 0, 0, 0, 0])
+})
+
+test('CLI optimizes, explains and profiles', () => {
+  const bin = path.join(__dirname, '..', 'bin', 'scriptmin.js')
+  const file = path.join(require('os').tmpdir(), `scriptmin-test-${process.pid}.asm`)
+  require('fs').writeFileSync(file, 'OP_2 OP_PICK OP_2 OP_PICK OP_MUL OP_3 OP_ROLL OP_DROP OP_2 OP_ROLL OP_DROP OP_NIP')
+  try {
+    const out = execFileSync('node', [bin, '--explain', '--tests', '20', file], { encoding: 'utf8' })
+    assert.match(out, /Minimized:\s+2 bytes/)
+    assert.match(out, /symbolic proof\s+passed/)
+    const json = JSON.parse(execFileSync('node', [bin, '--json', '--tests', '0', file], { encoding: 'utf8' }))
+    assert.strictEqual(json.script, '7595')
+    const prof = execFileSync('node', [bin, '--profile', file], { encoding: 'utf8' })
+    assert.match(prof, /PICK\/ROLL depths/)
+  } finally {
+    require('fs').unlinkSync(file)
+  }
+  assert.strictEqual(OP.OP_DROP, 0x75)
+})
