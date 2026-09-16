@@ -9,25 +9,26 @@ bytes, `OP_2DUP` is one.
 ```
 $ scriptmin -o field-6000.min.hex field-6000.hex
 Original:         93,167 bytes
-Minimized:        58,612 bytes
-Saved:            34,555 bytes
-Reduction:        37.09%
+Minimized:        58,481 bytes
+Saved:            34,686 bytes
+Reduction:        37.23%
 
 Breakdown:
-  stack-scheduling            -33,229
-  peephole                     -1,095
-  superoptimizer                 -231
+  stack-scheduling            -33,358
+  peephole                     -1,096
+  superoptimizer                 -232
 
 By what the bytes were doing:
-  stack                        79,593 ->       45,038  (-34,555)
+  stack                        79,593 ->       44,939  (-34,654)
+  arithmetic                   13,541 ->       13,509  (-32)
 
 Verification:
   symbolic proof         passed (1 regions, 0 barriers)
-  interpreter tests      passed (100 runs, 43 ran to success)
+  interpreter tests      passed (100 runs, 38 ran to success)
 ```
 
 On a real, hand-optimized BLS12-381 Miller loop (the 333 KB script that ran on
-mainnet) it removes **38%**, 333,031 → 205,273 bytes, and every test case of the
+mainnet) it removes **40%**, 333,031 → 199,147 bytes, and every test case of the
 library it came from still passes. See [docs/real-world.md](docs/real-world.md).
 
 Built on [`@smartledger/bsv`](https://www.npmjs.com/package/@smartledger/bsv)
@@ -102,12 +103,12 @@ Each region goes through these passes, repeated while they keep finding savings:
 | --- | --- |
 | **push-encoding** | Re-encodes non-minimal pushes (`OP_PUSHDATA1 01 05` becomes `OP_5`). |
 | **peephole** | Fixed rules: `OP_SWAP OP_ADD` becomes `OP_ADD`, `OP_EQUAL OP_VERIFY` becomes `OP_EQUALVERIFY`, `OP_1 OP_PICK` becomes `OP_OVER`, and so on. |
-| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. Deep values that are still needed several times (a field modulus, say) are rolled to the top once so later uses are shallow copies; the scheduler runs under several such policies and keeps the smallest result. Repeated expressions are computed once and kept alive (common subexpression elimination), tried against recomputation. |
+| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. Deep values that are still needed several times (a field modulus, say) are rolled to the top once so later uses are shallow copies; the scheduler runs under several such policies and keeps the smallest result. Repeated expressions are computed once and kept alive (common subexpression elimination), tried against recomputation. At `medium` and `high` effort a beam search over the scheduler's own choices (operand order, what to roll up, including the value the next few operations need most) replaces a single greedy pass where the stack stays shallow enough for it to be affordable. |
 | **superoptimizer** | For every short window of pure stack code, computes the stack transformation and finds the cheapest sequence producing it. A table of every stack-op sequence up to 5 bytes (6 at `--effort high`) answers most windows instantly. An A\* search handles windows with constants or the alt stack. Non-overlapping replacements are chosen by dynamic programming. |
 | **constant-folding** | Superoptimizer windows over constant operands (`OP_3 OP_5 OP_ADD` becomes `OP_8`, including hashes, `CAT`, `SPLIT` and numeric comparisons). |
 
-`--effort low|medium|high` sets the window length, table depth, search budget
-and how many chunkings the scheduler tries.
+`--effort low|medium|high` sets the window length, table depth, search budget,
+how many chunkings the scheduler tries, and the beam width (none, 4, 8).
 
 ### Pattern database
 
@@ -274,28 +275,27 @@ Fp12 tower chains (`node examples/bench-tower.js 1,4 medium lastuse`):
 
 | steps | gates | baseline | original | optimized | reduction |
 | ---: | ---: | --- | ---: | ---: | ---: |
-| 1 | 624 | PICK everything | 9,530 | 3,863 | 59.5% |
-| 1 | 624 | ROLL at last use | 6,178 | 3,863 | 37.5% |
-| 4 | 2,496 | PICK everything | 38,516 | 15,383 | 60.1% |
-| 4 | 2,496 | ROLL at last use | 24,844 | 15,383 | 38.1% |
+| 1 | 624 | PICK everything | 9,530 | 3,861 | 59.5% |
+| 1 | 624 | ROLL at last use | 6,178 | 3,861 | 37.5% |
+| 4 | 2,496 | PICK everything | 38,516 | 15,342 | 60.2% |
+| 4 | 2,496 | ROLL at last use | 24,844 | 15,342 | 38.3% |
 
 Random circuits, modulus fetched with `OP_PICK` (`npm run bench`):
 
 | gates | baseline | original | optimized | reduction | time |
 | ---: | --- | ---: | ---: | ---: | ---: |
-| 500 | PICK everything | 7,433 | 4,571 | 38.5% | 0.3s |
-| 500 | ROLL at last use | 5,582 | 4,544 | 18.6% | |
-| 6,000 | PICK everything | 93,167 | 58,612 | 37.1% | 3.2s |
+| 500 | PICK everything | 7,433 | 4,370 | 41.2% | 0.8s |
+| 500 | ROLL at last use | 5,582 | 4,370 | 21.7% | |
+| 6,000 | PICK everything | 93,167 | 58,481 | 37.2% | 2.9s |
 | 6,000 | ROLL at last use | 77,714 | 58,481 | 24.7% | |
-| 25,000 | PICK everything | 388,659 | 246,244 | 36.6% | 16.6s |
+| 25,000 | PICK everything | 388,659 | 245,717 | 36.8% | 15.4s |
 
-Both baselines optimize to essentially the same bytes: the scheduler rebuilds
-the stack choreography from the dataflow, so the compiler's own choices
-barely matter.
+Both baselines optimize to the same bytes: the scheduler rebuilds the stack
+choreography from the dataflow, so the compiler's own choices do not matter.
 
 When the compiler re-pushes the 33-byte modulus at every reduction instead of
 fetching it (`node examples/bench.js 6000 medium push`), a 312 KB script drops
-to 59 KB.
+to 58 KB.
 
 These are generated benchmarks. Hand-tuned scripts will save less. Times were
 taken on a desktop machine and vary with load.

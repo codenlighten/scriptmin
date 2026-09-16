@@ -31,32 +31,32 @@ witness.
 
 | module | original | scriptmin | saved |
 | --- | ---: | ---: | ---: |
-| **pairing.finalExp** | 473,562 | 295,153 | 37.7% |
-| **pairing.miller63** | 333,031 | 205,273 | 38.4% |
-| fp12.powX | 98,985 | 65,493 | 33.8% |
-| fp12.powXc | 73,674 | 50,248 | 31.8% |
+| **pairing.finalExp** | 473,562 | 284,713 | 39.9% |
+| **pairing.miller63** | 333,031 | 199,147 | 40.2% |
+| fp12.powX | 98,985 | 62,631 | 36.7% |
+| fp12.powXc | 73,674 | 48,494 | 34.2% |
 | sha256.block | 49,181 | 38,304 | 22.1% |
-| g1.inSubgroup | 8,530 | 8,095 | 5.1% |
-| fp12.inv | 3,523 | 2,270 | 35.6% |
-| fp12.mul | 3,248 | 2,263 | 30.3% |
-| fp12.sqr | 2,375 | 1,564 | 34.1% |
-| fp12.mulLine | 2,178 | 1,490 | 31.6% |
-| fp12.cycSqr | 1,342 | 1,020 | 24.0% |
-| fp12.frob | 798 | 647 | 18.9% |
+| g1.inSubgroup | 8,530 | 7,683 | 9.9% |
+| fp12.inv | 3,523 | 2,214 | 37.2% |
+| fp12.mul | 3,248 | 2,207 | 32.0% |
+| fp12.sqr | 2,375 | 1,538 | 35.2% |
+| fp12.mulLine | 2,178 | 1,451 | 33.4% |
+| fp12.cycSqr | 1,342 | 1,000 | 25.5% |
+| fp12.frob | 798 | 630 | 21.1% |
 | fp6.mul | 791 | 541 | 31.6% |
-| g2.stepAdd | 598 | 478 | 20.1% |
-| g2.stepDouble | 587 | 463 | 21.1% |
-| fp6.sqr | 500 | 337 | 32.6% |
+| g2.stepAdd | 598 | 471 | 21.2% |
+| g2.stepDouble | 587 | 454 | 22.7% |
+| fp6.sqr | 500 | 336 | 32.8% |
 | g2.inSubgroup | 444 | 411 | 7.4% |
 | totp.verify | 269 | 266 | 1.1% |
-| fp12.conj | 223 | 182 | 18.4% |
+| fp12.conj | 223 | 176 | 21.1% |
 | schnorr.liftX | 208 | 201 | 3.4% |
-| g2.onCurve | 205 | 178 | 13.2% |
+| g2.onCurve | 205 | 176 | 14.2% |
 | fp6.sub | 179 | 124 | 30.7% |
 | ec.add | 167 | 152 | 9.0% |
 | fp6.add | 164 | 107 | 34.8% |
-| ec.double | 153 | 139 | 9.2% |
-| g1.onCurve | 85 | 82 | 3.5% |
+| ec.double | 153 | 136 | 11.1% |
+| g1.onCurve | 85 | 80 | 5.9% |
 | fp6.mulV | 80 | 48 | 40.0% |
 | fp2.mul | 69 | 54 | 21.7% |
 | fp2.inv | 67 | 53 | 20.9% |
@@ -81,12 +81,12 @@ witness.
 | bytes.reverse, bytes.beToNum, u32.rotr, u32.shr, u32.xor, u32.add, hmac.sha256, hmac.sha1 | | | 0% |
 
 Every row: proof passed, every honest case passed, every refusal case refused.
-All 54 modules together: 582,669 → 381,362 bytes (−34.55%). The 333 KB Miller loop takes about 40 seconds and the final exponentiation
-(473 KB as emitted today) about 60. Together, one full pairing goes from
-806,593 to 500,426 bytes (−38.0%).
+All 55 modules together: 1,056,231 → 654,677 bytes (−38.0%). On an idle machine the 333 KB Miller loop takes about a minute and the final
+exponentiation (473 KB as emitted today) about two and a half. Together, one
+full pairing goes from 806,593 to 483,860 bytes (−40.0%).
 
-`pairing.miller63` by pass: stack scheduling −84,315, peephole −41,709,
-superoptimizer −1,734.
+`pairing.miller63` by pass: stack scheduling −92,071, peephole −41,432,
+superoptimizer −381.
 
 ## What the minimizer found
 
@@ -115,6 +115,16 @@ way to clear them. Once the whole region is rescheduled, most of those round
 trips are unnecessary: when a region leaves the alt stack as it found it, the
 scheduler also tries keeping those values on the main stack. That alone took
 the Miller loop from 229,981 to 205,273 bytes.
+
+The last few percent come from not scheduling greedily. The remaining cost
+is dominated by fetching the modulus, `<n> OP_PICK OP_MOD`, two bytes each,
+tens of thousands of times per stage. When p sits directly below the value
+being reduced that fetch is a one-byte `OP_OVER`, but getting it there means
+rolling p up *before* an operation that does not use it, which a greedy
+scheduler never has a reason to do. A beam search over the scheduler's choices
+(operand order, what to roll up, including the value the next few operations
+need most) finds those moments: the Miller loop from 205,273 to 199,147 bytes,
+`fp12.powX` from 65,493 to 62,631.
 
 ## Where it found nothing
 

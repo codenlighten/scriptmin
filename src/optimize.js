@@ -12,8 +12,8 @@ const { profile } = require('./profile')
 
 const EFFORT = {
   low: { window: 4, tableCost: 4, maxExpand: 0, rounds: 1, chunks: [Infinity, 64] },
-  medium: { window: 6, tableCost: 5, maxExpand: 1500, rounds: 2, chunks: [Infinity, 256, 64, 16] },
-  high: { window: 8, tableCost: 6, maxExpand: 5000, searchAll: true, rounds: 4, chunks: [Infinity, 512, 256, 128, 64, 32, 16, 8] }
+  medium: { window: 6, tableCost: 5, maxExpand: 1500, rounds: 2, beam: 4, chunks: [Infinity, 256, 64, 16] },
+  high: { window: 8, tableCost: 6, maxExpand: 5000, searchAll: true, rounds: 4, beam: 8, chunks: [Infinity, 512, 256, 128, 64, 32, 16, 8] }
 }
 
 const tables = new Map()
@@ -133,12 +133,21 @@ function optimize (input, options = {}) {
     while (cursor < r.start) out.push(ops[cursor++])
     const regionOps = ops.slice(r.start, r.end)
     if (regionOps.length) {
-      let res = optimizeRegion(regionOps, r.g, r.ga, cache, cfg)
-      // Greedy passes interact: a choice that wins inside the scheduler can
-      // leave less for the passes after it. Small regions are cheap enough to
-      // also run without alt-stack elimination and keep the smaller result.
+      const stats = {}
+      let res = optimizeRegion(regionOps, r.g, r.ga, cache, Object.assign({}, cfg, { stats }))
+      // Passes interact: a choice that wins inside the scheduler (the beam's
+      // schedule, dropping alt-stack round trips) can leave less for the
+      // passes after it, so the region is also run without those choices and
+      // the smallest result kept.
+      const alternatives = []
+      // The greedy schedule is cheap next to the beam, so whenever the beam
+      // ran it is tried as well.
+      if (cfg.beam && stats.beamRuns) alternatives.push({ beam: 0 })
       if (regionOps.length < 20000 && cfg.altElimination !== false && regionOps.some(o => o.code === OP.OP_TOALTSTACK)) {
-        const other = optimizeRegion(regionOps, r.g, r.ga, cache, Object.assign({}, cfg, { altElimination: false }))
+        alternatives.push({ altElimination: false })
+      }
+      for (const alt of alternatives) {
+        const other = optimizeRegion(regionOps, r.g, r.ga, cache, Object.assign({}, cfg, alt))
         if (opsSize(other.ops) < opsSize(res.ops)) res = other
       }
       if (res.reverted) reverted++

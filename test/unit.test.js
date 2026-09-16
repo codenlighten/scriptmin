@@ -230,3 +230,23 @@ test('field circuit compiler: lazy reduction matches the circuit exactly', () =>
   assert.strictEqual(evaluateIR(failing, [1n, 2n, 3n]).ok, false)
   compileField(failing, { tests: 5 })
 })
+
+test('beam scheduling is never worse than greedy, and skips deep stacks', () => {
+  const { compileNaive: compile } = require('../examples/naive-field-compiler')
+  const { millerLikeCircuit } = require('../examples/tower-circuit')
+  const script = compile(millerLikeCircuit(1), { modulus: 'pick', lastUse: true })
+  const greedy = optimize(script, { differential: 0, beam: 0 })
+  const beamed = optimize(script, { differential: 0, beam: 4 })
+  assert.ok(beamed.report.verification.symbolic.ok)
+  assert.ok(beamed.script.length <= greedy.script.length, `${beamed.script.length} > ${greedy.script.length}`)
+
+  const { rescheduleFragment } = require('../src/schedule')
+  const ops = parse(script)
+  const deep = {}
+  rescheduleFragment(ops, 0, 0, { beam: 4, beamMaxStack: 1, stats: deep })
+  assert.ok(!deep.beamRuns, 'a stack deeper than beamMaxStack must not be beam-searched')
+  const shallow = {}
+  const out = rescheduleFragment(ops, 0, 0, { beam: 4, stats: shallow })
+  assert.ok(shallow.beamRuns > 0)
+  assert.ok(equivOps(ops, out))
+})

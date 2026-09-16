@@ -79,6 +79,7 @@ class Machine {
     this.cnt = new Map()
     for (const x of S) this.cnt.set(x, (this.cnt.get(x) || 0) + 1)
     this.out = []
+    this.maxLen = S.length
   }
 
   clone () {
@@ -87,7 +88,11 @@ class Machine {
 
   cheap (id) { return this.I.isConst(id) && pushCost(this.I.constBuf(id)) <= 2 }
   count (id) { return this.cnt.get(id) || 0 }
-  push (id) { this.S.push(id); this.cnt.set(id, this.count(id) + 1) }
+  push (id) {
+    this.S.push(id)
+    this.cnt.set(id, this.count(id) + 1)
+    if (this.S.length > this.maxLen) this.maxLen = this.S.length
+  }
   removeAt (q) { const id = this.S.splice(q, 1)[0]; this.cnt.set(id, this.count(id) - 1); return id }
   emit (ops) { for (const o of ops) this.out.push(o) }
   excess (id) { return this.count(id) > this.live.need(id) }
@@ -182,6 +187,7 @@ class Machine {
     // Hoisting: a value that sits deep but is still needed several times is
     // rolled to the top once, so its next uses are cheap shallow copies
     // instead of repeated deep PICKs.
+    const hoisted = []
     if (this.hoist) {
       for (const x of new Set(app.inputs)) {
         if (this.I.isConst(x) && this.cheap(x)) continue
@@ -189,16 +195,30 @@ class Machine {
         let q = -1
         for (let i = this.S.length - 1; i >= 0; i--) if (this.S[i] === x) { q = i; break }
         if (q < 0 || this.S.length - 1 - q < this.hoist.minDepth) continue
-        this.emit(rollOps(this.S.length - 1 - q))
-        this.S.splice(q, 1)
-        this.S.push(x)
+        hoisted.push(x)
       }
     }
+    this.hoistValues(hoisted)
     let order = app.inputs
     if (app.comm && app.inputs.length === 2 && app.inputs[0] !== app.inputs[1]) {
       const alt = [app.inputs[1], app.inputs[0]]
       if (this.stageCost(alt) < this.stageCost(order)) order = alt
     }
+    this.applyOrdered(app, order)
+  }
+
+  hoistValues (xs) {
+    for (const x of xs) {
+      let q = -1
+      for (let i = this.S.length - 1; i >= 0; i--) if (this.S[i] === x) { q = i; break }
+      if (q < 0) continue
+      this.emit(rollOps(this.S.length - 1 - q))
+      this.S.splice(q, 1)
+      this.S.push(x)
+    }
+  }
+
+  applyOrdered (app, order) {
     // Large constants with more than one remaining use are pushed once, before
     // staging, so later uses can copy them.
     for (const x of new Set(order)) {
@@ -283,6 +303,156 @@ class Machine {
   }
 }
 
+// Beam search over the scheduler's own decisions. The greedy Machine picks,
+// per operation, an operand order and whether to hoist, looking no further
+// than that operation. This keeps the `width` cheapest partial schedules,
+// scored by bytes emitted plus a lookahead estimate of what fetching the next
+// few operations' operands will cost from the resulting stack.
+// Every partial schedule in the beam has processed the same operations, so
+// their liveness pointers are identical at the start of a step. They share one
+// base and record only what the current operation advances.
+class LiveView {
+  constructor (base) {
+    this.base = base
+    this.local = new Map()
+  }
+
+  pos (x) {
+    const l = this.local.get(x)
+    return l !== undefined ? l : (this.base.ptr.get(x) || 0)
+  }
+
+  need (x, ahead = 0) {
+    const t = this.base.tl.get(x)
+    if (!t) return 0
+    const p = this.pos(x) + ahead
+    if (p >= t.P.length - 1) return 0
+    return Math.max(0, t.suf[p + 1] - t.P[p])
+  }
+
+  advance (x) { this.local.set(x, this.pos(x) + 1) }
+
+  clone () {
+    const c = new LiveView(this.base)
+    c.local = new Map(this.local)
+    return c
+  }
+}
+
+class BeamMachine extends Machine {
+  constructor (I, S, live, tail = null, bytes = 0) {
+    super(I, S, live)
+    this.tail = tail
+    this.bytes = bytes
+  }
+
+  emit (ops) {
+    if (!ops.length) return
+    this.tail = { ops, prev: this.tail }
+    this.bytes += opsSize(ops)
+  }
+
+  clone () {
+    return new BeamMachine(this.I, this.S.slice(), this.live.clone(), this.tail, this.bytes)
+  }
+
+  ops () {
+    const parts = []
+    for (let t = this.tail; t; t = t.prev) parts.push(t.ops)
+    const out = []
+    for (let i = parts.length - 1; i >= 0; i--) for (const o of parts[i]) out.push(o)
+    return out
+  }
+
+  // Estimated bytes to bring the operands of `apps` to the top from here.
+  lookahead (apps) {
+    let h = 0
+    const S = this.S
+    for (const app of apps) {
+      for (const x of app.inputs) {
+        if (this.cheap(x)) { h += pushCost(this.I.constBuf(x)); continue }
+        let d = -1
+        for (let i = S.length - 1; i >= 0; i--) if (S[i] === x) { d = S.length - 1 - i; break }
+        if (d < 0) { h += 1; continue } // produced later, arrives near the top
+        h += d <= 1 ? 1 : d <= 16 ? 2 : 3
+      }
+    }
+    return h
+  }
+}
+
+function hotValue (m, app, next, minFreq) {
+  const freq = new Map()
+  for (const a of next) for (const x of a.inputs) if (!m.cheap(x)) freq.set(x, (freq.get(x) || 0) + 1)
+  let hot = null
+  for (const [x, f] of freq) if (f >= minFreq && m.count(x) > 0 && !app.inputs.includes(x) && (!hot || f > freq.get(hot))) hot = x
+  if (hot === null) return null
+  let d = -1
+  for (let i = m.S.length - 1; i >= 0; i--) if (m.S[i] === hot) { d = m.S.length - 1 - i; break }
+  return d >= 1 ? hot : null
+}
+
+function choicesFor (m, app, next) {
+  const orders = [app.inputs]
+  if (app.comm && app.inputs.length === 2 && app.inputs[0] !== app.inputs[1]) orders.push([app.inputs[1], app.inputs[0]])
+  const hoists = [[]]
+  for (const x of new Set(app.inputs)) {
+    if (m.cheap(x) || m.count(x) === 0) continue
+    let d = -1
+    for (let i = m.S.length - 1; i >= 0; i--) if (m.S[i] === x) { d = m.S.length - 1 - i; break }
+    if (d >= 2) hoists.push([x])
+  }
+  // The value the next few operations need most, if it is not an input here:
+  // rolling it up now lets this operation's result land above it.
+  const hot = hotValue(m, app, next, 2)
+  if (hot !== null) hoists.push([hot])
+  const out = []
+  for (const h of hoists) for (const o of orders) out.push({ hoist: h, order: o })
+  return out
+}
+
+function beamSchedule (I, S0, live, apps, needed, F, opts) {
+  const width = opts.beam
+  const L = opts.lookahead || 4
+  const seq = []
+  for (let j = 0; j < apps.length; j++) if (needed[j]) seq.push(apps[j])
+  const base = live.clone()
+  const root = new BeamMachine(I, S0.slice(), new LiveView(base))
+  root.cleanup()
+  let beam = [root]
+  for (let k = 0; k < seq.length; k++) {
+    const app = seq[k]
+    const next = seq.slice(k + 1, k + 1 + L)
+    const seen = new Map()
+    for (const m of beam) {
+      m.live = new LiveView(base)
+      for (const choice of choicesFor(m, app, next)) {
+        const c = m.clone()
+        c.hoistValues(choice.hoist)
+        c.applyOrdered(app, choice.order)
+        const key = c.S.join(',')
+        const prev = seen.get(key)
+        if (!prev || c.bytes < prev.bytes) seen.set(key, c)
+      }
+    }
+    const scored = [...seen.values()].map((c) => ({ c, score: c.bytes + c.lookahead(next) }))
+    scored.sort((a, b) => a.score - b.score || a.c.bytes - b.c.bytes)
+    beam = scored.slice(0, width).map((x) => x.c)
+    // Advance the shared pointers exactly as every candidate just did.
+    for (const x of app.inputs) base.advance(x)
+    for (const o of app.outputs) base.advance(o)
+  }
+  for (const m of beam) m.live = new LiveView(base)
+  let best = null
+  for (const m of beam) {
+    const plain = new Machine(I, m.S.slice(), m.live.clone())
+    plain.out = m.ops()
+    plain.finish(F, opts)
+    if (!best || opsSize(plain.out) < opsSize(best)) best = plain.out
+  }
+  return best
+}
+
 // Reschedules one fragment. Returns new ops or null.
 function rescheduleFragment (ops, g, ga, opts = {}) {
   const I = new Interner()
@@ -343,6 +513,7 @@ function scheduleApps (I, D, apps, F, opts) {
   for (let i = D - 1; i >= 0; i--) S0.push(I.input(i))
   const live = new Liveness(apps, needed, F)
   let best = null
+  let maxLen = 0
   for (const hoist of opts.hoistVariants || HOIST_VARIANTS) {
     const mach = new Machine(I, S0.slice(), live.clone())
     mach.hoist = hoist
@@ -357,6 +528,20 @@ function scheduleApps (I, D, apps, F, opts) {
       continue
     }
     if (!best || opsSize(mach.out) < opsSize(best)) best = mach.out
+    maxLen = Math.max(maxLen, mach.maxLen)
+  }
+  // The beam copies and scans the stack for every candidate at every step, so
+  // its cost grows with stack depth. Generated field code stays shallow (the
+  // BLS12-381 final exponentiation peaks near 500 items); code that keeps
+  // thousands of values live gets the greedy schedule.
+  if (opts.beam && maxLen <= (opts.beamMaxStack || 640)) {
+    if (opts.stats) opts.stats.beamRuns = (opts.stats.beamRuns || 0) + 1
+    try {
+      const b = beamSchedule(I, S0, live, apps, needed, F, opts)
+      if (b && (!best || opsSize(b) < opsSize(best))) best = b
+    } catch (e) {
+      if (opts.debug) throw e
+    }
   }
   return best
 }
