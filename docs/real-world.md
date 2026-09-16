@@ -31,22 +31,22 @@ witness.
 
 | module | original | scriptmin | saved |
 | --- | ---: | ---: | ---: |
-| **pairing.miller63** | **333,031** | **229,981** | **30.9%** |
-| fp12.powX | 98,985 | 72,802 | 26.5% |
-| fp12.powXc | 73,674 | 55,352 | 24.9% |
+| **pairing.miller63** | 333,031 | 205,273 | 38.4% |
+| fp12.powX | 98,985 | 65,493 | 33.8% |
+| fp12.powXc | 73,674 | 50,248 | 31.8% |
 | sha256.block | 49,181 | 38,304 | 22.1% |
 | g1.inSubgroup | 8,530 | 8,095 | 5.1% |
-| fp12.inv | 3,523 | 2,457 | 30.3% |
-| fp12.mul | 3,248 | 2,413 | 25.7% |
-| fp12.sqr | 2,375 | 1,701 | 28.4% |
-| fp12.mulLine | 2,178 | 1,536 | 29.5% |
+| fp12.inv | 3,523 | 2,270 | 35.6% |
+| fp12.mul | 3,248 | 2,263 | 30.3% |
+| fp12.sqr | 2,375 | 1,564 | 34.1% |
+| fp12.mulLine | 2,178 | 1,490 | 31.6% |
 | fp12.cycSqr | 1,342 | 1,020 | 24.0% |
 | fp12.frob | 798 | 647 | 18.9% |
-| fp6.mul | 791 | 565 | 28.6% |
-| g2.stepAdd | 598 | 493 | 17.6% |
-| g2.stepDouble | 587 | 477 | 18.7% |
-| fp6.sqr | 500 | 348 | 30.4% |
-| g2.inSubgroup | 444 | 414 | 6.8% |
+| fp6.mul | 791 | 541 | 31.6% |
+| g2.stepAdd | 598 | 478 | 20.1% |
+| g2.stepDouble | 587 | 463 | 21.1% |
+| fp6.sqr | 500 | 337 | 32.6% |
+| g2.inSubgroup | 444 | 411 | 7.4% |
 | totp.verify | 269 | 266 | 1.1% |
 | fp12.conj | 223 | 182 | 18.4% |
 | schnorr.liftX | 208 | 201 | 3.4% |
@@ -55,15 +55,35 @@ witness.
 | ec.add | 167 | 152 | 9.0% |
 | fp6.add | 164 | 107 | 34.8% |
 | ec.double | 153 | 139 | 9.2% |
+| g1.onCurve | 85 | 82 | 3.5% |
+| fp6.mulV | 80 | 48 | 40.0% |
 | fp2.mul | 69 | 54 | 21.7% |
 | fp2.inv | 67 | 53 | 20.9% |
-| u32.add, bytes.*, hmac.*, u32 rotations | | | 0% |
+| fp2.sub | 47 | 36 | 23.4% |
+| fp2.add | 43 | 31 | 27.9% |
+| fp2.sqr | 42 | 28 | 33.3% |
+| fp2.mulFp | 36 | 25 | 30.6% |
+| fp2.mulXi | 32 | 21 | 34.4% |
+| int.modexp | 31 | 21 | 32.3% |
+| sha256.Sigma0 | 31 | 27 | 12.9% |
+| sha256.Sigma1 | 31 | 27 | 12.9% |
+| fp2.neg | 28 | 21 | 25.0% |
+| int.modinv | 27 | 16 | 40.7% |
+| sha256.sigma0 | 25 | 22 | 12.0% |
+| sha256.sigma1 | 25 | 22 | 12.0% |
+| fp2.conj | 24 | 15 | 37.5% |
+| int.modsub | 22 | 15 | 31.8% |
+| int.modadd | 20 | 13 | 35.0% |
+| int.modmul | 20 | 13 | 35.0% |
+| u32.maj | 17 | 13 | 23.5% |
+| u32.ch | 9 | 8 | 11.1% |
+| bytes.reverse, bytes.beToNum, u32.rotr, u32.shr, u32.xor, u32.add, hmac.sha256, hmac.sha1 | | | 0% |
 
 Every row: proof passed, every honest case passed, every refusal case refused.
-The 333 KB Miller loop takes about 40 seconds.
+All 54 modules together: 582,669 → 381,362 bytes (−34.55%). The 333 KB Miller loop takes about 40 seconds.
 
-`pairing.miller63` by pass: stack scheduling −58,864, peephole −41,639,
-superoptimizer −2,547.
+`pairing.miller63` by pass: stack scheduling −84,315, peephole −41,709,
+superoptimizer −1,734.
 
 ## What the minimizer found
 
@@ -85,6 +105,13 @@ straight back.
 The rest is stack scheduling. Rebuilding choreography from the dataflow finds
 moves where copies and later drops were emitted, and shallower access paths,
 across module boundaries that hand-optimization inside a module cannot see.
+
+About 25 KB of that is the alt stack. The modules park temporaries there
+(`OP_TOALTSTACK` … `OP_FROMALTSTACK`) because inside one module that is the cheap
+way to clear them. Once the whole region is rescheduled, most of those round
+trips are unnecessary: when a region leaves the alt stack as it found it, the
+scheduler also tries keeping those values on the main stack. That alone took
+the Miller loop from 229,981 to 205,273 bytes.
 
 ## Where it found nothing
 

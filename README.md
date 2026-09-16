@@ -27,7 +27,7 @@ Verification:
 ```
 
 On a real, hand-optimized BLS12-381 Miller loop (the 333 KB script that ran on
-mainnet) it removes **31%**, 333,031 → 229,981 bytes, and every test case of the
+mainnet) it removes **38%**, 333,031 → 205,273 bytes, and every test case of the
 library it came from still passes. See [docs/real-world.md](docs/real-world.md).
 
 Built on [`@smartledger/bsv`](https://www.npmjs.com/package/@smartledger/bsv)

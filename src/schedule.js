@@ -304,6 +304,14 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
     return fresh
   })
   const appLists = deduped.length < recorded.length && opts.cse !== false ? [recorded, deduped] : [recorded]
+  // Variant without the alt stack: when the fragment neither reads alt-stack
+  // values it did not push nor leaves anything there, its alt moves only
+  // transport values, and the scheduler can keep those values on the main
+  // stack instead of paying two bytes per round trip.
+  if (st.usedAlt && st.A === 0 && st.alt.length === 0 && opts.altElimination !== false) {
+    const isAlt = a => a.code === OP.OP_TOALTSTACK || a.code === OP.OP_FROMALTSTACK
+    for (const list of appLists.slice()) appLists.push(list.filter(a => !isAlt(a)))
+  }
   let best = null
   for (const apps of appLists) {
     const r = scheduleApps(I, st.D, apps, F, opts)

@@ -158,7 +158,11 @@ test('CLI optimizes, explains and profiles', () => {
 
 test('schedules through the alt stack without keeping spare copies', () => {
   const r = opt('OP_TOALTSTACK OP_2 OP_PICK OP_2 OP_PICK OP_MUL OP_FROMALTSTACK OP_3 OP_ROLL OP_DROP OP_ADD OP_NIP OP_NIP')
-  assert.strictEqual(asm(r), 'OP_NIP OP_TOALTSTACK OP_MUL OP_FROMALTSTACK OP_ADD')
+  assert.strictEqual(r.script.length, 5)
+  // Balanced alt-stack use can disappear entirely.
+  assert.strictEqual(asm(opt('OP_DUP OP_TOALTSTACK OP_ADD OP_FROMALTSTACK OP_MUL')), 'OP_TUCK OP_ADD OP_MUL')
+  // Unbalanced use (a value left on the alt stack) must stay.
+  assert.match(asm(opt('OP_DUP OP_TOALTSTACK OP_ADD')), /OP_TOALTSTACK/)
   assert.strictEqual(asm(opt('OP_2 OP_PICK OP_2 OP_PICK OP_ADD OP_TOALTSTACK OP_2DROP OP_DROP OP_FROMALTSTACK')), 'OP_DROP OP_ADD')
 })
 

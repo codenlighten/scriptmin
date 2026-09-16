@@ -133,7 +133,14 @@ function optimize (input, options = {}) {
     while (cursor < r.start) out.push(ops[cursor++])
     const regionOps = ops.slice(r.start, r.end)
     if (regionOps.length) {
-      const res = optimizeRegion(regionOps, r.g, r.ga, cache, cfg)
+      let res = optimizeRegion(regionOps, r.g, r.ga, cache, cfg)
+      // Greedy passes interact: a choice that wins inside the scheduler can
+      // leave less for the passes after it. Small regions are cheap enough to
+      // also run without alt-stack elimination and keep the smaller result.
+      if (regionOps.length < 20000 && cfg.altElimination !== false && regionOps.some(o => o.code === OP.OP_TOALTSTACK)) {
+        const other = optimizeRegion(regionOps, r.g, r.ga, cache, Object.assign({}, cfg, { altElimination: false }))
+        if (opsSize(other.ops) < opsSize(res.ops)) res = other
+      }
       if (res.reverted) reverted++
       for (const rw of res.rewrites) {
         rw.regionOffset = offsets[r.start] === undefined ? off : offsets[r.start]
