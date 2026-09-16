@@ -24,6 +24,6 @@
     "scriptmin": "bin/scriptmin.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.19"
   }
 }

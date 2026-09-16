@@ -214,7 +214,7 @@ class SymState {
         const m = this.main
         if (m.length === 0 || !this.I.isConst(m[m.length - 1])) return false
         const n = decodeNum(this.I.constBuf(m[m.length - 1]), 4)
-        return n !== null && n >= 0n && n < 4096n
+        return n !== null && n >= 0n && n < 250000n
       }
       return true
     }

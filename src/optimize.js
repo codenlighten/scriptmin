@@ -26,8 +26,13 @@ function schedulePass (ops, g, ga, cfg) {
   const { hm, ha } = heights(ops, g, ga, cfg)
   let best = ops
   let bestLog = []
+  let wholeWorked = false
   if (ops.length < 3) return { ops, rewrites: [] }
   for (const K of cfg.chunks) {
+    // Rescheduling the whole region sees every value's full lifetime and
+    // almost always wins; smaller chunks are a fallback for regions where it
+    // cannot be applied.
+    if (K !== Infinity && wholeWorked) break
     const cand = []
     const log = []
     let pos = 0
@@ -36,11 +41,12 @@ function schedulePass (ops, g, ga, cfg) {
       while (end < ops.length && isPush(ops[end - 1])) end++
       const chunk = ops.slice(pos, end)
       const r = chunk.length >= 3 ? rescheduleFragment(chunk, hm[pos], ha[pos], cfg) : null
+      if (K === Infinity && r) wholeWorked = true
       if (r && opsSize(r) < opsSize(chunk)) {
-        cand.push(...r)
+        for (const o of r) cand.push(o)
         log.push({ pass: 'stack-scheduling', index: pos, before: chunk, after: r, saved: opsSize(chunk) - opsSize(r) })
       } else {
-        cand.push(...chunk)
+        for (const o of chunk) cand.push(o)
       }
       pos = end
     }
@@ -133,7 +139,7 @@ function optimize (input, options = {}) {
         rw.regionOffset = offsets[r.start] === undefined ? off : offsets[r.start]
         rewrites.push(rw)
       }
-      out.push(...res.ops)
+      for (const o of res.ops) out.push(o)
     }
     cursor = r.end
   }

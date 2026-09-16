@@ -37,7 +37,7 @@ npm test
 npx scriptmin --help
 ```
 
-Requires Node 18+.
+Requires Node 20.19+ (the version `@smartledger/bsv` needs).
 
 ## Command line
 
@@ -96,7 +96,7 @@ Each region goes through these passes, repeated while they keep finding savings:
 | --- | --- |
 | **push-encoding** | Re-encodes non-minimal pushes (`OP_PUSHDATA1 01 05` becomes `OP_5`). |
 | **peephole** | Fixed rules: `OP_SWAP OP_ADD` becomes `OP_ADD`, `OP_EQUAL OP_VERIFY` becomes `OP_EQUALVERIFY`, `OP_1 OP_PICK` becomes `OP_OVER`, and so on. |
-| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. |
+| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. |
 | **superoptimizer** | For every short window of pure stack code, computes the stack transformation and finds the cheapest sequence producing it. A table of every stack-op sequence up to 5 bytes (6 at `--effort high`) answers most windows instantly. An A\* search handles windows with constants or the alt stack. Non-overlapping replacements are chosen by dynamic programming. |
 | **constant-folding** | Superoptimizer windows over constant operands (`OP_3 OP_5 OP_ADD` becomes `OP_8`, including hashes, `CAT`, `SPLIT` and numeric comparisons). |
 
@@ -197,10 +197,11 @@ Modulus kept on the stack and fetched with `OP_PICK` (`npm run bench`):
 
 | gates | original | optimized | reduction | time |
 | ---: | ---: | ---: | ---: | ---: |
-| 50 | 690 | 457 | 33.8% | 0.2s |
-| 500 | 7,433 | 5,125 | 31.1% | 0.4s |
-| 2,000 | 30,528 | 23,277 | 23.8% | 2.5s |
-| 6,000 | 93,167 | 72,926 | 21.7% | 19.5s |
+| 50 | 690 | 451 | 34.6% | 0.2s |
+| 500 | 7,433 | 5,115 | 31.2% | 0.2s |
+| 2,000 | 30,528 | 23,232 | 23.9% | 0.8s |
+| 6,000 | 93,167 | 72,870 | 21.8% | 2.7s |
+| 25,000 | 388,659 | 306,954 | 21.0% | 12.0s |
 
 When the compiler also re-pushes the 33-byte modulus at every reduction
 (`node examples/bench.js 50,500,2000,6000 medium push`), a 312 KB script
@@ -233,8 +234,5 @@ bin/scriptmin.js  command line
   against recomputing it.
 - Algebraic rewriting (`a*b + a*c` becomes `a*(b+c)`), with domain-aware rules
   for Fp, Fp2, Fp6 and Fp12 and SMT-checked side conditions.
-- Stack scheduling through the alt stack, and across `IF`/`ELSE` where both
-  branches can be modelled.
+- Stack scheduling across `IF`/`ELSE` where both branches can be modelled.
 - Modelling `OP_CHECKMULTISIG` with constant key and signature counts.
-- Faster scheduling on very deep stacks. Time is currently superlinear in the
-  number of live values.
