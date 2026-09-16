@@ -31,6 +31,7 @@ witness.
 
 | module | original | scriptmin | saved |
 | --- | ---: | ---: | ---: |
+| **pairing.finalExp** | 473,562 | 295,153 | 37.7% |
 | **pairing.miller63** | 333,031 | 205,273 | 38.4% |
 | fp12.powX | 98,985 | 65,493 | 33.8% |
 | fp12.powXc | 73,674 | 50,248 | 31.8% |
@@ -80,7 +81,9 @@ witness.
 | bytes.reverse, bytes.beToNum, u32.rotr, u32.shr, u32.xor, u32.add, hmac.sha256, hmac.sha1 | | | 0% |
 
 Every row: proof passed, every honest case passed, every refusal case refused.
-All 54 modules together: 582,669 → 381,362 bytes (−34.55%). The 333 KB Miller loop takes about 40 seconds.
+All 54 modules together: 582,669 → 381,362 bytes (−34.55%). The 333 KB Miller loop takes about 40 seconds and the final exponentiation
+(473 KB as emitted today) about 60. Together, one full pairing goes from
+806,593 to 500,426 bytes (−38.0%).
 
 `pairing.miller63` by pass: stack scheduling −84,315, peephole −41,709,
 superoptimizer −1,734.
