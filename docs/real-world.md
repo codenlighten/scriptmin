@@ -122,3 +122,22 @@ the Miller loop from 229,981 to 205,273 bytes.
 They are short, dominated by `OP_SPLIT`/`OP_CAT`/byte shuffling whose
 choreography is already minimal, or small enough that the scheduler's generic
 output is no better than the hand-written one.
+
+## On mainnet
+
+The module library's chain tooling can build its stage scripts through
+scriptmin (`SCRIPTMIN=1`, see its `src/minimize.js`). Its two-transaction
+BLS12-381 pairing chain was redeployed that way:
+
+| | as first deployed | minimized |
+| --- | ---: | ---: |
+| Miller-loop stage script | 344,840 B | 206,795 B |
+| final-exponentiation stage script | 476,067 B | 297,263 B |
+| fees for the whole chain | 165,942 sat | 102,572 sat |
+
+Funding [`7948b2a3…`](https://whatsonchain.com/tx/7948b2a31e07484ba764e2c69fd9e923e10e5ab406f3abea9a8767e04d117902),
+Miller loop [`282bf493…`](https://whatsonchain.com/tx/282bf49356d28c986b685081e45ed29d92c16ccdcccb642c446ce0a392594307),
+final exponentiation [`016ce0cc…`](https://whatsonchain.com/tx/016ce0cc88a3bf4764f8f3d7108129d8229742bd1048241ca6fe71642c4e2d2d).
+The library's chain walker rebuilds both stages through the recorded scriptmin
+commit, finds them in the funding transaction byte for byte, and checks that
+the final carrier holds e(P, Q).
