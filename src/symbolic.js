@@ -8,9 +8,11 @@
 // run from the same unknown starting stacks, they
 //   - need the same incoming depth (so they underflow on exactly the same inputs),
 //   - leave identical symbolic main and alt stacks, and
-//   - evaluate the same multiset of operations that can fail.
-// The last point is what makes reordering and dead-value removal safe: script
-// failure is all-or-nothing, so what matters is which checks run, not when.
+//   - evaluate the same set of operations that can fail.
+// The last point is what makes reordering, dead-value removal and common
+// subexpression elimination safe: script failure is all-or-nothing and every
+// check is deterministic, so what matters is which checks run, not when or
+// how often.
 
 const bsv = require('@smartledger/bsv')
 const { OP, isPush, pushValue } = require('./script')
@@ -344,9 +346,12 @@ function padded (items, have, want, mk) {
   return fresh.concat(items)
 }
 
-function sameMap (a, b) {
+// Every operation that can fail is a deterministic function of its operands
+// (and the transaction), so evaluating the same one twice fails exactly when
+// evaluating it once does: only the set of such operations matters.
+function sameKeys (a, b) {
   if (a.size !== b.size) return false
-  for (const [k, v] of a) if (b.get(k) !== v) return false
+  for (const k of a.keys()) if (!b.has(k)) return false
   return true
 }
 
@@ -363,7 +368,7 @@ function equivalent (opsA, opsB, g = 0, ga = 0, opts = {}) {
 function statesEquivalent (a, b, g, ga) {
   if (Math.max(a.D, g) !== Math.max(b.D, g)) return false
   if (Math.max(a.A, ga) !== Math.max(b.A, ga)) return false
-  if (!sameMap(a.events, b.events)) return false
+  if (!sameKeys(a.events, b.events)) return false
   const D = Math.max(a.D, b.D)
   const A = Math.max(a.A, b.A)
   const I = a.I

@@ -173,3 +173,12 @@ test('interpreter runs are isolated from each other', () => {
   evaluate(script, [], flags)
   assert.strictEqual(script.toString('hex'), '018483')
 })
+
+test('computes repeated expressions once', () => {
+  assert.strictEqual(asm(opt('OP_2DUP OP_MUL OP_ROT OP_ROT OP_MUL OP_ADD')), 'OP_MUL OP_DUP OP_ADD')
+  assert.strictEqual(asm(opt('OP_DUP OP_SHA256 OP_SWAP OP_SHA256 OP_CAT')), 'OP_SHA256 OP_DUP OP_CAT')
+  // The same check twice fails exactly when it fails once.
+  assert.strictEqual(asm(opt('OP_OVER OP_OVER OP_ADD OP_VERIFY OP_ADD OP_VERIFY')), 'OP_ADD OP_VERIFY')
+  // Different checks must all survive.
+  assert.match(asm(opt('OP_OVER OP_OVER OP_ADD OP_VERIFY OP_SUB OP_VERIFY')), /OP_ADD.*OP_SUB/)
+})

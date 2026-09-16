@@ -96,7 +96,7 @@ Each region goes through these passes, repeated while they keep finding savings:
 | --- | --- |
 | **push-encoding** | Re-encodes non-minimal pushes (`OP_PUSHDATA1 01 05` becomes `OP_5`). |
 | **peephole** | Fixed rules: `OP_SWAP OP_ADD` becomes `OP_ADD`, `OP_EQUAL OP_VERIFY` becomes `OP_EQUALVERIFY`, `OP_1 OP_PICK` becomes `OP_OVER`, and so on. |
-| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. Deep values that are still needed several times (a field modulus, say) are rolled to the top once so later uses are shallow copies; the scheduler runs under several such policies and keeps the smallest result. |
+| **stack-scheduling** | Lifts the region to its dataflow (which operations run on which values, and what must be left on the stack), then regenerates all the stack movement using liveness. A value's last use becomes a move (`ROLL`/`ROT`/`SWAP`) instead of a copy followed by a drop later. Dead values are dropped when they surface. Operations that cannot fail and whose results are never used are removed. Operand order is picked by cost for commutative ops. Large constants are pushed once and then copied. Alt-stack moves are replayed in their original order, and a value parked on the alt stack is not also kept on the main stack. Deep values that are still needed several times (a field modulus, say) are rolled to the top once so later uses are shallow copies; the scheduler runs under several such policies and keeps the smallest result. Repeated expressions are computed once and kept alive (common subexpression elimination), tried against recomputation. |
 | **superoptimizer** | For every short window of pure stack code, computes the stack transformation and finds the cheapest sequence producing it. A table of every stack-op sequence up to 5 bytes (6 at `--effort high`) answers most windows instantly. An A\* search handles windows with constants or the alt stack. Non-overlapping replacements are chosen by dynamic programming. |
 | **constant-folding** | Superoptimizer windows over constant operands (`OP_3 OP_5 OP_ADD` becomes `OP_8`, including hashes, `CAT`, `SPLIT` and numeric comparisons). |
 
@@ -126,11 +126,12 @@ operands normalized. Two regions are equivalent when:
    `OP_DUP OP_DROP` at the start of a script is kept. There it is what makes an
    empty stack fail.
 2. **They leave identical symbolic main and alt stacks.**
-3. **They evaluate the same multiset of operations that can fail.** Arithmetic
+3. **They evaluate the same set of operations that can fail.** Arithmetic
    can fail on oversized numbers, `DIV` on zero, `VERIFY` on false. Script
-   failure is all-or-nothing, so these checks may move but may not disappear.
-   Operations that cannot fail (`EQUAL`, `SIZE`, hashes, `INVERT`) may be
-   removed when their results are unused.
+   failure is all-or-nothing and every such operation is deterministic, so a
+   check may move, and a repeated identical check may run once, but no
+   distinct check may disappear. Operations that cannot fail (`EQUAL`, `SIZE`,
+   hashes, `INVERT`) may be removed when their results are unused.
 
 The barrier sequences of the two scripts must be identical. If the proof fails,
 `optimize` throws instead of returning a script.
@@ -230,8 +231,6 @@ bin/scriptmin.js  command line
 
 - An IR mode that takes a compiler's symbolic program directly, before
   emission discards information.
-- Common subexpression elimination, weighing the cost of keeping a value alive
-  against recomputing it.
 - Algebraic rewriting (`a*b + a*c` becomes `a*(b+c)`), with domain-aware rules
   for Fp, Fp2, Fp6 and Fp12 and SMT-checked side conditions.
 - Stack scheduling across `IF`/`ELSE` where both branches can be modelled.

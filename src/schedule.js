@@ -289,7 +289,34 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
   const st = run(ops, I, Object.assign({}, opts, { record: true }))
   if (!st) return null
   const F = st.main
-  const apps = st.apps
+  const recorded = st.apps
+  // Variant with common subexpression elimination: an operation whose
+  // results were all produced earlier is dropped, and liveness keeps the
+  // earlier results alive until their last use.
+  const seen = new Set()
+  const deduped = recorded.filter(a => {
+    if (a.pinned) return true
+    const fresh = a.outputs.length === 0
+      ? !seen.has('v' + a.inputs.join(',') + ':' + a.code)
+      : a.outputs.some((o, idx) => !(a.passthrough && idx === 0) && !seen.has(o))
+    for (const o of a.outputs) seen.add(o)
+    if (a.outputs.length === 0) seen.add('v' + a.inputs.join(',') + ':' + a.code)
+    return fresh
+  })
+  const appLists = deduped.length < recorded.length && opts.cse !== false ? [recorded, deduped] : [recorded]
+  let best = null
+  for (const apps of appLists) {
+    const r = scheduleApps(I, st.D, apps, F, opts)
+    if (r && (!best || opsSize(r) < opsSize(best))) best = r
+  }
+  if (!best) return null
+
+  const out = peephole(best, g, ga, opts).ops
+  if (!equivalent(ops, out, g, ga, opts)) return null
+  return out
+}
+
+function scheduleApps (I, D, apps, F, opts) {
 
   const uses = new Map()
   const inc = x => uses.set(x, (uses.get(x) || 0) + 1)
@@ -305,7 +332,7 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
   }
 
   const S0 = []
-  for (let i = st.D - 1; i >= 0; i--) S0.push(I.input(i))
+  for (let i = D - 1; i >= 0; i--) S0.push(I.input(i))
   const live = new Liveness(apps, needed, F)
   let best = null
   for (const hoist of opts.hoistVariants || HOIST_VARIANTS) {
@@ -323,11 +350,7 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
     }
     if (!best || opsSize(mach.out) < opsSize(best)) best = mach.out
   }
-  if (!best) return null
-
-  const out = peephole(best, g, ga, opts).ops
-  if (!equivalent(ops, out, g, ga, opts)) return null
-  return out
+  return best
 }
 
 // Scheduling is greedy, so it runs once per hoisting policy and keeps the smallest.
