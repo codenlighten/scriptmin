@@ -315,9 +315,8 @@ bin/scriptmin.js  command line
 
 ## Roadmap
 
-- More circuit-level rewrites: shared-factor rewriting (`a*b + a*c` to
-  `a*(b+c)`), Karatsuba-style multiplication choices, squaring formulas.
-- Algebraic rewriting (`a*b + a*c` becomes `a*(b+c)`), with domain-aware rules
-  for Fp, Fp2, Fp6 and Fp12 and SMT-checked side conditions.
+- Circuit-level algebraic rewriting: shared factors (`a*b + a*c` becomes
+  `a*(b+c)`), Karatsuba and squaring formulas, with tower-aware rules for Fp2,
+  Fp6 and Fp12.
 - Stack scheduling across `IF`/`ELSE` where both branches can be modelled.
 - Modelling `OP_CHECKMULTISIG` with constant key and signature counts.
