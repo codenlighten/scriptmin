@@ -1,6 +1,6 @@
 {
   "name": "@smartledger/scriptmin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bitcoin Script minimizer: byte profiler, symbolic stack IR, stack scheduler and superoptimizer with proven-equivalent rewrites",
   "keywords": [
     "bitcoin",
