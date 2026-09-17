@@ -6,7 +6,7 @@ const fs = require('fs')
 // Output piped into something that stops reading (| head) is not an error.
 process.stdout.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e })
 const path = require('path')
-const { optimize, profile, Cache, toAsm, toBuffer } = require('../src')
+const { optimize, profile, Cache, toAsm, exactAsm, toBuffer } = require('../src')
 const { parse } = require('../src/script')
 const { StackTable } = require('../src/superopt')
 const { EFFORT } = require('../src/optimize')
@@ -82,6 +82,15 @@ function parseArgs (argv) {
 function die (msg) {
   process.stderr.write(`scriptmin: ${msg}\n`)
   process.exit(2)
+}
+
+// Written ASM must read back as the same script: refuse rather than write a different one.
+function asmOut (script) {
+  try {
+    return exactAsm(script) + '\n'
+  } catch (e) {
+    die(e.message)
+  }
 }
 
 const fmt = n => n.toLocaleString('en-US')
@@ -173,7 +182,7 @@ function compileMain (argv) {
   } catch (e) {
     die(e.message)
   }
-  if (a.out) fs.writeFileSync(a.out, a.asm ? toAsm(parse(res.script)) + '\n' : res.script.toString('hex') + '\n')
+  if (a.out) fs.writeFileSync(a.out, a.asm ? asmOut(res.script) : res.script.toString('hex') + '\n')
   const r = res.report
   if (a.json) {
     process.stdout.write(JSON.stringify({ script: res.script.toString('hex'), gates: r.gates, maxBits: r.maxBits, bytes: r.optimized, referenceBytes: r.reference, checked: r.checked, ms: r.ms }, null, 2) + '\n')
@@ -275,7 +284,7 @@ function main () {
   if (a.db && cache) fs.writeFileSync(a.db, JSON.stringify(cache.toJSON()))
 
   if (a.out) {
-    const data = a.binary ? res.script : a.asm ? toAsm(parse(res.script)) + '\n' : res.script.toString('hex') + '\n'
+    const data = a.binary ? res.script : a.asm ? asmOut(res.script) : res.script.toString('hex') + '\n'
     fs.mkdirSync(path.dirname(path.resolve(a.out)), { recursive: true })
     fs.writeFileSync(a.out, data)
   }

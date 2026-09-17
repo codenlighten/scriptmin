@@ -187,6 +187,47 @@ test('CLI optimizes, explains and profiles', () => {
   assert.strictEqual(OP.OP_DROP, 0x75)
 })
 
+test('ASM output reads back byte for byte, or is refused', () => {
+  const { exactAsm } = require('../src')
+  const { differential, eraFlags } = require('../src/verify')
+  for (const src of [
+    'OP_DUP OP_HASH160 ' + '11'.repeat(20) + ' OP_EQUALVERIFY OP_CHECKSIG OP_RETURN 74657374 ' + 'ab'.repeat(80),
+    'OP_0 OP_IF 6f7264 OP_1 746578742f706c61696e OP_0 ' + 'cd'.repeat(300) + ' OP_ENDIF OP_1',
+    'OP_1 OP_RETURN OP_INVALIDOPCODE 0'
+  ]) {
+    const buf = toBuffer(src)
+    assert.ok(toBuffer(exactAsm(buf)).equals(buf), src)
+  }
+  assert.throws(() => exactAsm(Buffer.from('4c03aabbcc51', 'hex')), /not minimally encoded/)
+  assert.throws(() => exactAsm(Buffer.from('516a05aabb', 'hex')), /truncated push/)
+  assert.throws(() => exactAsm(Buffer.from('4c50' + 'ab'.repeat(80), 'hex')), /only data pushes/)
+
+  const bin = path.join(__dirname, '..', 'bin', 'scriptmin.js')
+  const dir = require('fs').mkdtempSync(path.join(require('os').tmpdir(), 'scriptmin-asm-'))
+  try {
+    const src = 'OP_DUP OP_DROP OP_DUP OP_HASH160 ' + '11'.repeat(20) + ' OP_EQUALVERIFY OP_CHECKSIG OP_RETURN ' + 'ab'.repeat(40)
+    require('fs').writeFileSync(path.join(dir, 'in.asm'), src)
+    execFileSync('node', [bin, '--asm', '--tests', '0', '-o', path.join(dir, 'out.asm'), path.join(dir, 'in.asm')])
+    const written = require('fs').readFileSync(path.join(dir, 'out.asm'), 'utf8')
+    assert.ok(written.trim().endsWith('OP_RETURN ' + 'ab'.repeat(40)), written)
+    require('fs').writeFileSync(path.join(dir, 'odd.hex'), '76756a4c03aabbcc')
+    assert.throws(() => execFileSync('node', [bin, '--asm', '--tests', '0', '-o', path.join(dir, 'odd.asm'), path.join(dir, 'odd.hex')], { stdio: 'pipe' }), e => e.status === 2 && /write it as hex/.test(e.stderr))
+  } finally {
+    require('fs').rmSync(dir, { recursive: true, force: true })
+  }
+
+  // Scripts optimized without assuming Chronicle are checked under the rules before it too.
+  assert.strictEqual(eraFlags().length, 1)
+  assert.strictEqual(eraFlags({ chronicle: false }).length, 2)
+  // Between Genesis and Chronicle this OP_VERIF opens nothing, so the OP_DROP runs.
+  const orig = toBuffer('OP_1 OP_IF OP_0 OP_IF OP_VERIF OP_ELSE OP_DROP OP_ENDIF OP_ENDIF OP_DUP OP_DROP OP_1')
+  const wrong = toBuffer('OP_1 OP_IF OP_0 OP_IF OP_VERIF OP_ELSE OP_DROP OP_ENDIF OP_ENDIF OP_1')
+  const stacks = [[Buffer.from([7])]]
+  assert.ok(differential(orig, wrong, { runs: 0, stacks, flags: eraFlags() }).ok)
+  assert.ok(!differential(orig, wrong, { runs: 0, stacks, flags: eraFlags({ chronicle: false }) }).ok)
+  assert.strictEqual(opt('OP_DUP OP_DROP OP_1 OP_ADD', { chronicle: false }).report.verification.differential.eras, 2)
+})
+
 // A constant ROLL index in the tens of thousands makes the fragment need that
 // many inputs. Arranging them one by one was quadratic (75 s here); a schedule
 // is abandoned once it is far larger than the fragment it would replace.

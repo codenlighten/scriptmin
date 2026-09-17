@@ -145,3 +145,22 @@ test('wide opcode fuzz with stacks that pass checks', () => {
   }
   assert.ok(passing > 0)
 })
+
+// OP_0 OP_IF blocks holding OP_VERIF/OP_VERNOTIF inside other conditionals: in
+// an unexecuted branch those open a conditional after Chronicle and do nothing
+// before it. Optimized without assuming Chronicle, and checked in both eras.
+test('conditionals whose meaning changes with Chronicle, checked in both eras', () => {
+  const { eraFlags } = require('../src/verify')
+  const r = rng(0xC4C)
+  const pick = a => a[r() % a.length]
+  const seq = () => Array.from({ length: r() % 3 }, () => pick(['OP_DUP', 'OP_DROP', 'OP_SWAP', 'OP_OVER', 'OP_1', 'OP_ADD', 'OP_NIP', 'OP_DUP OP_DROP', 'OP_RETURN'])).join(' ')
+  const { toBuffer } = require('../src/script')
+  for (let i = 0; i < 400; i++) {
+    const src = [seq(), pick(['OP_1', 'OP_0', '']), 'OP_IF', 'OP_0 OP_IF', pick(['OP_VERIF', 'OP_VERNOTIF']), seq(),
+      pick(['OP_ELSE', '']), seq(), 'OP_ENDIF', seq(), pick(['OP_ENDIF', '']), seq(), 'OP_DUP OP_DROP', seq()].join(' ').replace(/\s+/g, ' ').trim()
+    const buf = toBuffer(src)
+    const res = optimize(buf, { chronicle: false, differential: false })
+    const diff = differential(buf, res.script, { runs: 15, maxDepth: 5, flags: eraFlags({ chronicle: false }) })
+    assert.ok(diff.ok, `mismatch for ${src} -> ${res.script.toString('hex')}: ${JSON.stringify(diff)}`)
+  }
+})

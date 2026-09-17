@@ -24,5 +24,6 @@ module.exports = {
   parse: script.parse,
   encode: script.encode,
   toAsm: script.toAsm,
+  exactAsm: script.exactAsm,
   toBuffer: script.toBuffer
 }
