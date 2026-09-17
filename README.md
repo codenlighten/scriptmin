@@ -58,7 +58,7 @@ cd scriptmin && npm install && npm test
 ```bash
 scriptmin script.hex                     # optimize, print report and hex
 scriptmin -o min.hex script.hex          # write the result
-scriptmin --asm -o min.asm script.asm    # ASM in, ASM out
+scriptmin --asm -o min.asm script.asm    # ASM in, ASM out (refused if ASM cannot hold it exactly)
 scriptmin --profile script.hex           # where the bytes go
 scriptmin --explain script.hex           # every rewrite, largest first
 scriptmin --json script.hex              # machine-readable report
@@ -159,7 +159,8 @@ The barrier sequences of the two scripts must be identical. If the proof fails,
 `@smartledger/bsv` interpreter with random starting stacks, plus any you supply
 with `--stacks`. Success, final stack and final alt stack must match. Random
 stacks rarely get past a script's first real check, so for large verifiers pass
-realistic unlocking stacks with `--stacks`.
+realistic unlocking stacks with `--stacks`. With `--no-chronicle` the tests run
+under the rules before Chronicle as well as after it.
 
 ### Assumptions and caveats
 
@@ -167,6 +168,12 @@ realistic unlocking stacks with `--stacks`.
   Chronicle opcodes (`OP_SUBSTR`, `OP_LEFT`, `OP_RIGHT`, `OP_LSHIFTNUM`,
   `OP_RSHIFTNUM`) are modelled with their Chronicle stack effects. Use
   `--no-chronicle` to treat them as barriers.
+- **ASM cannot hold every script.** It does not record how data was pushed, so
+  `--asm -o` refuses a result with a non-minimal push (optimized code is
+  minimal, but `OP_0 OP_IF` blocks and data after `OP_RETURN` are kept
+  verbatim), a truncated push, an unnamed opcode, or only data pushes, rather
+  than write a different script.
+  Hex and `--binary` output are always exact.
 - **Signatures commit to the script.** `OP_CHECKSIG` signs the script code, so
   signatures and OP_PUSH_TX preimages must be created against the optimized
   script. A covenant that embeds its own script hash, length or bytes must be
@@ -307,6 +314,7 @@ report.verification     // { symbolic, differential }
 profile(script)                    // categories, opcodes, PICK/ROLL depths, costly patterns
 proveEquivalent(a, b)              // { ok, regions, barriers } or { ok: false, reason }
 differential(a, b, { runs: 500 })  // { ok, runs, succeeded } or a counterexample
+exactAsm(script)                   // ASM that reads back byte for byte, or throws
 ```
 
 ## Benchmarks

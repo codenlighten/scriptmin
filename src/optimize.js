@@ -7,7 +7,7 @@ const { peephole } = require('./peephole')
 const { windowsRegion } = require('./windows')
 const { rescheduleFragment } = require('./schedule')
 const { Cache, StackTable } = require('./superopt')
-const { proveEquivalent, differential } = require('./verify')
+const { proveEquivalent, differential, eraFlags } = require('./verify')
 const { profile } = require('./profile')
 
 const EFFORT = {
@@ -173,7 +173,7 @@ function optimize (input, options = {}) {
     }
   }
   if (cfg.differential !== 0 && cfg.differential !== false) {
-    const diff = differential(buf, script, { runs: typeof cfg.differential === 'number' ? cfg.differential : 100, stacks: cfg.stacks || [] })
+    const diff = differential(buf, script, { runs: typeof cfg.differential === 'number' ? cfg.differential : 100, stacks: cfg.stacks || [], flags: eraFlags(cfg) })
     verification.differential = diff
     if (!diff.ok) {
       const err = new Error('internal error: optimized script disagrees with the original on a test input')

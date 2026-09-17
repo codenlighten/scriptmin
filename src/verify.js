@@ -96,7 +96,28 @@ function randomElement (rnd) {
 // Runs both scripts on random starting stacks (and any supplied ones) and
 // compares success, final stack and final alt stack. Failures are compared
 // only as failures: an optimized script may fail at a different op.
+// Consensus flags for the eras a script is checked in. Chronicle changes what
+// some opcodes do (OP_VERIF and OP_VERNOTIF in an unexecuted branch, OP_2MUL,
+// OP_SUBSTR, ...), so a script optimized without assuming Chronicle is checked
+// under the rules before it as well.
+function eraFlags ({ chronicle = true } = {}) {
+  const current = Interpreter.currentConsensusFlags()
+  if (chronicle) return [current]
+  return [current, current & ~(Interpreter.SCRIPT_UTXO_AFTER_CHRONICLE | Interpreter.SCRIPT_ENABLE_CHRONICLE)]
+}
+
 function differential (originalBuf, optimizedBuf, { runs = 200, maxDepth = 12, stacks = [], flags } = {}) {
+  if (Array.isArray(flags)) {
+    let total = 0
+    let succeeded = 0
+    for (const f of flags) {
+      const d = differential(originalBuf, optimizedBuf, { runs, maxDepth, stacks, flags: f })
+      if (!d.ok) return Object.assign(d, { flags: f })
+      total += d.runs
+      succeeded += d.succeeded
+    }
+    return { ok: true, runs: total, succeeded, eras: flags.length }
+  }
   flags = flags === undefined ? Interpreter.currentConsensusFlags() : flags
   const rnd = () => crypto.randomBytes(4).readUInt32LE(0)
   const inputs = stacks.slice()
@@ -121,4 +142,4 @@ function differential (originalBuf, optimizedBuf, { runs = 200, maxDepth = 12, s
   return { ok: true, runs: inputs.length, succeeded }
 }
 
-module.exports = { proveEquivalent, differential, evaluate, encode }
+module.exports = { proveEquivalent, differential, evaluate, encode, eraFlags }

@@ -163,15 +163,23 @@ function opName (code) {
   return NAMES[code] || ('OP_UNKNOWN' + code)
 }
 
-function toAsm (ops, { maxData = 0 } = {}) {
+// ASM for reading. With `bare`, it is the ASM @smartledger/bsv reads: data as
+// bare hex whatever its push opcode, and the bytes after a top-level OP_RETURN
+// as ASM when they parse. See exactAsm for writing a script out.
+function toAsm (ops, { maxData = 0, bare = false } = {}) {
   return ops.map(op => {
-    if (op.code === TAIL) return `<tail ${op.raw.length} bytes>`
-    if (op.code === DEAD) return toAsm(parse(op.raw, { deadBlocks: false }), { maxData })
+    if (op.code === TAIL) {
+      if (bare) {
+        try { return bsv.Script.fromBuffer(op.raw).toASM() } catch (e) {}
+      }
+      return `<tail ${op.raw.length} bytes>`
+    }
+    if (op.code === DEAD) return toAsm(parse(op.raw, { deadBlocks: false }), { maxData, bare })
     if (op.code === OP.OP_0) return 'OP_0'
     if (op.code > 0 && op.code <= OP.OP_PUSHDATA4) {
       const hex = op.data.toString('hex')
       const shown = maxData && hex.length > maxData * 2 ? hex.slice(0, maxData * 2) + '…' : hex
-      return op.code >= OP.OP_PUSHDATA1 ? `${opName(op.code)}:${shown}` : shown
+      return op.code >= OP.OP_PUSHDATA1 && !bare ? `${opName(op.code)}:${shown}` : shown
     }
     return opName(op.code)
   }).join(' ')
@@ -188,6 +196,49 @@ function toBuffer (input) {
   return bsv.Script.fromASM(text.replace(/\s+/g, ' ')).toBuffer()
 }
 
+// Whether a push anywhere in buf, including after OP_RETURN, runs past its end.
+function truncated (buf) {
+  let i = 0
+  while (i < buf.length) {
+    const code = buf[i++]
+    if (code === 0 || code > OP.OP_PUSHDATA4) continue
+    let len = code
+    if (code >= OP.OP_PUSHDATA1) {
+      const w = code === OP.OP_PUSHDATA1 ? 1 : code === OP.OP_PUSHDATA2 ? 2 : 4
+      if (i + w > buf.length) return true
+      len = w === 1 ? buf[i] : w === 2 ? buf.readUInt16LE(i) : buf.readUInt32LE(i)
+      i += w
+    }
+    if (i + len > buf.length) return true
+    i += len
+  }
+  return false
+}
+
+// ASM that reads back as exactly `buf`, or an error. ASM cannot say how data
+// was pushed (OP_PUSHDATA1 with a short payload reads back as a direct push),
+// a truncated push, or an opcode with no name; and text of bare hex alone reads
+// as hex. Scripts like those have to be written as hex.
+function exactAsm (buf) {
+  const asm = toAsm(parse(buf), { bare: true })
+  let back = null
+  try { back = toBuffer(asm) } catch (e) {}
+  if (!back || !back.equals(buf)) {
+    const ops = parse(buf, { deadBlocks: false })
+    const why = truncated(buf)
+      ? 'it contains a truncated push'
+      : ops.some(o => isPush(o) && o.code !== TAIL && opSize(pushOp(pushValue(o))) !== opSize(o))
+        ? 'a push is not minimally encoded, and ASM cannot say how data was pushed'
+        : /OP_UNKNOWN|\bOP_INVALIDOPCODE\b/.test(asm) || ops.some(o => o.code >= 0 && !isPush(o) && !NAMES[o.code])
+          ? 'it uses an opcode that has no name in ASM'
+          : !/\bOP_/.test(asm)
+              ? 'it is only data pushes, and ASM with no opcodes reads back as hex'
+              : 'its ASM reads back as a different script'
+    throw new Error(`cannot write this script as ASM: ${why}; write it as hex`)
+  }
+  return asm
+}
+
 function sameOp (a, b) {
   if (a.code !== b.code) return false
   if (a.code === TAIL || a.code === DEAD) return a.raw.equals(b.raw)
@@ -197,5 +248,5 @@ function sameOp (a, b) {
 
 module.exports = {
   OP, TAIL, DEAD, isPush, pushValue, opSize, opsSize, pushOp, pushCost, numOp,
-  parse, encode, toAsm, toBuffer, opName, sameOp
+  parse, encode, toAsm, exactAsm, toBuffer, opName, sameOp
 }
