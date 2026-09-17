@@ -103,6 +103,11 @@ test('keeps OP_0 OP_IF data envelopes byte for byte and optimizes around them', 
   assert.ok(parse(toBuffer('OP_0 OP_IF OP_1 OP_ELSE OP_2 OP_ENDIF')).every(o => o.code >= 0))
   assert.strictEqual(parse(toBuffer('OP_0 OP_IF OP_1 OP_IF OP_2 OP_ELSE OP_3 OP_ENDIF OP_ENDIF'))[0].code, -2)
   assert.ok(parse(toBuffer('OP_0 OP_IF OP_1')).every(o => o.code >= 0))
+  // Between Genesis and Chronicle an unexecuted OP_VERIF opens nothing, so this
+  // OP_ELSE belongs to the OP_0 OP_IF and the OP_DROP runs.
+  assert.ok(parse(toBuffer('OP_0 OP_IF OP_VERIF OP_ELSE OP_DROP OP_ENDIF OP_ENDIF')).every(o => o.code >= 0))
+  const verif = 'OP_DUP OP_DROP OP_1 OP_IF OP_0 OP_IF OP_VERIF OP_ELSE OP_DROP OP_ENDIF OP_ENDIF OP_DUP OP_DROP OP_1'
+  assert.match(asm(opt(verif, { chronicle: false })), /OP_ENDIF OP_DUP OP_DROP OP_1$/)
 })
 
 test('equivalence checker', () => {

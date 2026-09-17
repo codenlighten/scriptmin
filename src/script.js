@@ -71,7 +71,10 @@ function numOp (n) {
 
 // Where the `OP_0 OP_IF` block whose OP_IF sits at `i` ends (the index after
 // its OP_ENDIF), or -1 if it is not a dead block: it has an OP_ELSE of its own
-// (that branch runs), no matching OP_ENDIF, or a truncated push.
+// (that branch runs), no matching OP_ENDIF, or a truncated push. A block holding
+// OP_VERIF or OP_VERNOTIF is not treated as dead either: in an unexecuted branch
+// they open a conditional after Chronicle but do nothing between Genesis and
+// Chronicle, so where the block ends depends on the era.
 function deadBlockEnd (buf, i) {
   let depth = 0
   while (i < buf.length) {
@@ -88,7 +91,8 @@ function deadBlockEnd (buf, i) {
       i += len
       continue
     }
-    if (code === OP.OP_IF || code === OP.OP_NOTIF || code === OP.OP_VERIF || code === OP.OP_VERNOTIF) depth++
+    if (code === OP.OP_VERIF || code === OP.OP_VERNOTIF) return -1
+    if (code === OP.OP_IF || code === OP.OP_NOTIF) depth++
     else if (code === OP.OP_ELSE && depth === 1) return -1
     else if (code === OP.OP_ENDIF && --depth === 0) return i
   }
