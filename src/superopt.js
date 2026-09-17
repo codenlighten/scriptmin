@@ -73,7 +73,6 @@ function search (p) {
   for (const x of p.target) need[x]++
   for (const x of p.targetAlt) need[x]++
   const useAlt = p.startAlt.length > 0 || p.targetAlt.length > 0 || p.allowAlt
-  const targetKey = p.target.join(',') + '|' + p.targetAlt.join(',')
   const constList = [...p.consts.entries()].map(([sym, buf]) => [sym, pushOp(buf)])
   const have = new Int32Array(nsym)
 
@@ -92,25 +91,32 @@ function search (p) {
     return Math.max(Math.ceil(missing / 3), Math.ceil(surplus / 2))
   }
 
+  const same = (a, b) => {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+    return true
+  }
   const isGoal = st =>
     (!p.touch || st.t) && (!p.touchAlt || st.ta) &&
-    st.main.length === p.target.length && st.alt.length === p.targetAlt.length &&
-    (st.main.join(',') + '|' + st.alt.join(',')) === targetKey
+    same(st.main, p.target) && same(st.alt, p.targetAlt)
 
-  const keyOf = st => st.main.join(',') + '|' + st.alt.join(',') + '|' + (st.t ? 1 : 0) + (st.ta ? 1 : 0)
+  // Each state carries its own key: it is built once, when the state is made,
+  // rather than again at every pop and every goal test.
+  const keyOf = (main, alt, t, ta) => main.join(',') + '|' + alt.join(',') + '|' + (t ? 1 : 0) + (ta ? 1 : 0)
 
   const root = { main: p.start.slice(), alt: p.startAlt.slice(), t: p.start.length === 0, ta: p.startAlt.length === 0, g: 0, parent: null, op: null }
+  root.key = keyOf(root.main, root.alt, root.t, root.ta)
   const best = new Map()
   const q = new BucketQueue()
   const h0 = h(root.main, root.alt)
   if (h0 >= p.bound) return null
   q.push(h0, root)
-  best.set(keyOf(root), 0)
+  best.set(root.key, 0)
   let expanded = 0
 
   while (q.size) {
     const st = q.pop()
-    if (best.get(keyOf(st)) < st.g) continue
+    if (best.get(st.key) < st.g) continue
     if (isGoal(st)) {
       const ops = []
       for (let n = st; n.parent; n = n.parent) ops.push(...n.op.slice().reverse())
@@ -124,13 +130,11 @@ function search (p) {
       if (g >= p.bound || main.length > p.maxLen || alt.length > p.maxAlt) return
       const hh = h(main, alt)
       if (g + hh >= p.bound) return
-      // A move that produces a non-goal state still costs at least one more byte.
-      const child = { main, alt, t: touched, ta: touchedAlt, g, parent: st, op: ops }
-      const k = keyOf(child)
+      const k = keyOf(main, alt, touched, touchedAlt)
       const prev = best.get(k)
       if (prev !== undefined && prev <= g) return
       best.set(k, g)
-      q.push(g + hh, child)
+      q.push(g + hh, { main, alt, t: touched, ta: touchedAlt, g, parent: st, op: ops, key: k })
     }
 
     for (const [code, k, fn] of FIXED) {
