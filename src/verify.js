@@ -93,9 +93,6 @@ function randomElement (rnd) {
   return crypto.randomBytes(rnd() % 40)
 }
 
-// Runs both scripts on random starting stacks (and any supplied ones) and
-// compares success, final stack and final alt stack. Failures are compared
-// only as failures: an optimized script may fail at a different op.
 // Consensus flags for the eras a script is checked in. Chronicle changes what
 // some opcodes do (OP_VERIF and OP_VERNOTIF in an unexecuted branch, OP_2MUL,
 // OP_SUBSTR, ...), so a script optimized without assuming Chronicle is checked
@@ -106,6 +103,11 @@ function eraFlags ({ chronicle = true } = {}) {
   return [current, current & ~(Interpreter.SCRIPT_UTXO_AFTER_CHRONICLE | Interpreter.SCRIPT_ENABLE_CHRONICLE)]
 }
 
+// Runs both scripts on random starting stacks (and any supplied ones) and
+// compares success, final stack and final alt stack. Failures are compared
+// only as failures: an optimized script may fail at a different op. `flags`
+// may be a list of flag sets, one per era; the first era that disagrees is
+// returned with its counterexample.
 function differential (originalBuf, optimizedBuf, { runs = 200, maxDepth = 12, stacks = [], flags } = {}) {
   if (Array.isArray(flags)) {
     let total = 0
