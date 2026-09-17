@@ -199,6 +199,8 @@ test('ASM output reads back byte for byte, or is refused', () => {
     assert.ok(toBuffer(exactAsm(buf)).equals(buf), src)
   }
   assert.throws(() => exactAsm(Buffer.from('4c03aabbcc51', 'hex')), /not minimally encoded/)
+  // An unnamed opcode is written as its raw byte, 0xba.
+  assert.strictEqual(exactAsm(Buffer.from('51ba6a05aabbccddee', 'hex')), 'OP_1 0xba OP_RETURN aabbccddee')
   assert.throws(() => exactAsm(Buffer.from('516a05aabb', 'hex')), /truncated push/)
   assert.throws(() => exactAsm(Buffer.from('4c50' + 'ab'.repeat(80), 'hex')), /only data pushes/)
 

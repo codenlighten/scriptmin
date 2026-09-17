@@ -171,7 +171,8 @@ under the rules before Chronicle as well as after it.
 - **ASM cannot hold every script.** It does not record how data was pushed, so
   `--asm -o` refuses a result with a non-minimal push (optimized code is
   minimal, but `OP_0 OP_IF` blocks and data after `OP_RETURN` are kept
-  verbatim), a truncated push, an unnamed opcode, or only data pushes, rather
+  verbatim), a truncated push, an unnamed opcode with `@smartledger/bsv` older
+  than 9.11.1, or only data pushes, rather
   than write a different script.
   Hex and `--binary` output are always exact.
 - **Signatures commit to the script.** `OP_CHECKSIG` signs the script code, so

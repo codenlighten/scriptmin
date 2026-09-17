@@ -181,6 +181,9 @@ function toAsm (ops, { maxData = 0, bare = false } = {}) {
       const shown = maxData && hex.length > maxData * 2 ? hex.slice(0, maxData * 2) + '…' : hex
       return op.code >= OP.OP_PUSHDATA1 && !bare ? `${opName(op.code)}:${shown}` : shown
     }
+    // An opcode with no name is written as its raw byte, as @smartledger/bsv
+    // writes it (and reads it back from 9.11.1).
+    if (bare && !NAMES[op.code]) return '0x' + op.code.toString(16).padStart(2, '0')
     return opName(op.code)
   }).join(' ')
 }
@@ -229,8 +232,8 @@ function exactAsm (buf) {
       ? 'it contains a truncated push'
       : ops.some(o => isPush(o) && o.code !== TAIL && opSize(pushOp(pushValue(o))) !== opSize(o))
         ? 'a push is not minimally encoded, and ASM cannot say how data was pushed'
-        : /OP_UNKNOWN|\bOP_INVALIDOPCODE\b/.test(asm) || ops.some(o => o.code >= 0 && !isPush(o) && !NAMES[o.code])
-          ? 'it uses an opcode that has no name in ASM'
+        : ops.some(o => o.code >= 0 && !isPush(o) && !NAMES[o.code])
+          ? 'it uses an opcode that has no name, which @smartledger/bsv reads back from ASM only from 9.11.1'
           : !/\bOP_/.test(asm)
               ? 'it is only data pushes, and ASM with no opcodes reads back as hex'
               : 'its ASM reads back as a different script'
