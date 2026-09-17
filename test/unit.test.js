@@ -204,6 +204,7 @@ test('ASM output reads back byte for byte, or is refused', () => {
   // An empty push in OP_RETURN data, as buildDataOut('') writes it (read back from bsv 9.11.2).
   assert.strictEqual(exactAsm(Buffer.from('516a00020aff', 'hex')), 'OP_1 OP_RETURN 0 0aff')
   assert.throws(() => exactAsm(Buffer.from('516a05aabb', 'hex')), /truncated push/)
+  assert.throws(() => exactAsm(Buffer.from('516a4c00', 'hex')), /not minimally encoded/)
   assert.throws(() => exactAsm(Buffer.from('4c50' + 'ab'.repeat(80), 'hex')), /only data pushes/)
 
   const bin = path.join(__dirname, '..', 'bin', 'scriptmin.js')
@@ -215,7 +216,7 @@ test('ASM output reads back byte for byte, or is refused', () => {
     const written = require('fs').readFileSync(path.join(dir, 'out.asm'), 'utf8')
     assert.ok(written.trim().endsWith('OP_RETURN ' + 'ab'.repeat(40)), written)
     require('fs').writeFileSync(path.join(dir, 'odd.hex'), '76756a4c03aabbcc')
-    assert.throws(() => execFileSync('node', [bin, '--asm', '--tests', '0', '-o', path.join(dir, 'odd.asm'), path.join(dir, 'odd.hex')], { stdio: 'pipe' }), e => e.status === 2 && /write it as hex/.test(e.stderr))
+    assert.throws(() => execFileSync('node', [bin, '--asm', '--tests', '0', '-o', path.join(dir, 'odd.asm'), path.join(dir, 'odd.hex')], { stdio: 'pipe' }), e => e.status === 2 && /not minimally encoded/.test(e.stderr))
   } finally {
     require('fs').rmSync(dir, { recursive: true, force: true })
   }
