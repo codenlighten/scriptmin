@@ -104,9 +104,13 @@ function windowsRegion (ops, g, ga, cache, opts = {}) {
       problem.maxExpand = maxExpand
       // Pure stack shuffles with constants are left to the table unless effort
       // allows open-ended search; folding and alt-stack windows always search.
-      problem.tableOnly = !opts.searchAll && (
+      // The A* search's cost grows with the stack it starts from, while its
+      // wins do not: on real scripts every replacement it finds starts from a
+      // stack of at most ~16 items, and the deeper searches only run out their
+      // budget. Past that depth the window is left to the table.
+      problem.tableOnly = problem.start.length > (opts.searchMaxDepth ?? 16) || (!opts.searchAll && (
         (!win.some(o => !isPush(o) && !STACK_OPS.has(o.code)) && !problem.allowAlt && !!problem.consts.size) ||
-        problem.start.length > tableN)
+        problem.start.length > tableN))
       // The window's bytes plus the facts that constrain its replacement
       // determine the answer, so they make a compact, reusable key.
       const key = encode(win).toString('hex') + '|' + (problem.touch ? 1 : 0) + (problem.touchAlt ? 1 : 0) +
