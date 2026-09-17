@@ -31,6 +31,12 @@ On a real, hand-optimized BLS12-381 Miller loop (the 333 KB script that ran on
 mainnet) it removes **40%**, 333,031 → 199,147 bytes, and every test case of the
 library it came from still passes. See [docs/real-world.md](docs/real-world.md).
 
+Across a sample of mainnet, the saving is concentrated in contracts that check
+their own transaction: about 20% of their bytes, and under 1% of all
+locking-script bytes, since most of the chain is P2PKH (already minimal) and
+data. See [docs/mainnet-survey.md](docs/mainnet-survey.md), which you can
+reproduce with `examples/mainnet-survey.js`.
+
 Built on [`@smartledger/bsv`](https://www.npmjs.com/package/@smartledger/bsv)
 for script parsing, hashing and the reference interpreter used in testing.
 
