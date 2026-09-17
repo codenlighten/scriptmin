@@ -7,7 +7,6 @@ const fs = require('fs')
 process.stdout.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e })
 const path = require('path')
 const { optimize, profile, Cache, toAsm, exactAsm, toBuffer } = require('../src')
-const { parse } = require('../src/script')
 const { StackTable } = require('../src/superopt')
 const { EFFORT } = require('../src/optimize')
 
