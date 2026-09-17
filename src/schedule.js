@@ -16,7 +16,7 @@
 //     at each use.
 // The result is only kept if it is smaller and symbolically equivalent.
 
-const { OP, numOp, pushOp, pushCost, opsSize } = require('./script')
+const { OP, numOp, pushOp, pushCost, opSize, opsSize } = require('./script')
 const { Interner, run, equivalent } = require('./symbolic')
 const { search } = require('./superopt')
 const { peephole } = require('./peephole')
@@ -80,10 +80,15 @@ class Machine {
     for (const x of S) this.cnt.set(x, (this.cnt.get(x) || 0) + 1)
     this.out = []
     this.maxLen = S.length
+    this.bytes = 0
+    this.budget = Infinity
   }
 
   clone () {
-    return new Machine(this.I, this.S.slice(), this.live.clone())
+    const m = new Machine(this.I, this.S.slice(), this.live.clone())
+    m.bytes = this.bytes
+    m.budget = this.budget
+    return m
   }
 
   cheap (id) { return this.I.isConst(id) && pushCost(this.I.constBuf(id)) <= 2 }
@@ -94,7 +99,14 @@ class Machine {
     if (this.S.length > this.maxLen) this.maxLen = this.S.length
   }
   removeAt (q) { const id = this.S.splice(q, 1)[0]; this.cnt.set(id, this.count(id) - 1); return id }
-  emit (ops) { for (const o of ops) this.out.push(o) }
+  // A schedule is only used when it is smaller than the fragment it replaces.
+  // Giving up once it is far past that keeps deep stacks (a constant ROLL
+  // index in the tens of thousands) from turning finish() quadratic.
+  emit (ops) {
+    for (const o of ops) { this.out.push(o); this.bytes += opSize(o) }
+    if (this.bytes > this.budget) throw new Error('scheduler: over budget')
+  }
+
   excess (id) { return this.count(id) > this.live.need(id) }
 
   stage (order) {
@@ -250,11 +262,14 @@ class Machine {
 
     const tailS = S.slice(prefix)
     const tailF = F.slice(prefix)
+    const small = tailS.length <= 6 && tailF.length <= 7
     const generic = this.clone()
     generic.out = []
+    // A short tail is searched for below, which may beat the generic arrangement.
+    if (small) generic.budget = Infinity
     generic.arrange(F, prefix)
     let ops = generic.out
-    if (tailS.length <= 6 && tailF.length <= 7) {
+    if (small) {
       const sym = new Map()
       const symOf = id => { if (!sym.has(id)) sym.set(id, sym.size); return sym.get(id) }
       const start = tailS.map(symOf)
@@ -447,7 +462,14 @@ function beamSchedule (I, S0, live, apps, needed, F, opts) {
   for (const m of beam) {
     const plain = new Machine(I, m.S.slice(), m.live.clone())
     plain.out = m.ops()
-    plain.finish(F, opts)
+    plain.bytes = m.bytes
+    plain.budget = budgetFor(opts)
+    try {
+      plain.finish(F, opts)
+    } catch (e) {
+      if (opts.debug && !/over budget/.test(e.message)) throw e
+      continue
+    }
     if (!best || opsSize(plain.out) < opsSize(best)) best = plain.out
   }
   return best
@@ -483,8 +505,9 @@ function rescheduleFragment (ops, g, ga, opts = {}) {
     for (const list of appLists.slice()) appLists.push(list.filter(a => !isAlt(a)))
   }
   let best = null
+  const scheduleOpts = Object.assign({}, opts, { budget: 2 * opsSize(ops) + 16 })
   for (const apps of appLists) {
-    const r = scheduleApps(I, st.D, apps, F, opts)
+    const r = scheduleApps(I, st.D, apps, F, scheduleOpts)
     if (r && (!best || opsSize(r) < opsSize(best))) best = r
   }
   if (!best) return null
@@ -516,6 +539,7 @@ function scheduleApps (I, D, apps, F, opts) {
   let maxLen = 0
   for (const hoist of opts.hoistVariants || HOIST_VARIANTS) {
     const mach = new Machine(I, S0.slice(), live.clone())
+    mach.budget = budgetFor(opts)
     mach.hoist = hoist
     try {
       mach.cleanup()
@@ -524,7 +548,7 @@ function scheduleApps (I, D, apps, F, opts) {
     } catch (e) {
       // An inconsistency here means a missed case in the scheduler, never a
       // wrong script: the fragment is simply left as it was.
-      if (opts.debug) throw e
+      if (opts.debug && !/over budget/.test(e.message)) throw e
       continue
     }
     if (!best || opsSize(mach.out) < opsSize(best)) best = mach.out
@@ -545,6 +569,10 @@ function scheduleApps (I, D, apps, F, opts) {
   }
   return best
 }
+
+// Bytes a schedule may emit before it is abandoned: peephole runs afterwards,
+// so allow room above the size it has to beat.
+const budgetFor = opts => opts.budget ?? Infinity
 
 // Scheduling is greedy, so it runs once per hoisting policy and keeps the smallest.
 const HOIST_VARIANTS = [null, { minUses: 3, minDepth: 17 }, { minUses: 6, minDepth: 17 }, { minUses: 10, minDepth: 17 }]

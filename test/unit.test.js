@@ -156,6 +156,15 @@ test('CLI optimizes, explains and profiles', () => {
   assert.strictEqual(OP.OP_DROP, 0x75)
 })
 
+// A constant ROLL index in the tens of thousands makes the fragment need that
+// many inputs. Arranging them one by one was quadratic (75 s here); a schedule
+// is abandoned once it is far larger than the fragment it would replace.
+test('gives up on schedules far larger than the fragment, even on very deep stacks', { timeout: 40000 }, () => {
+  const r = opt('OP_DUP OP_DROP e35901 OP_ROLL OP_SWAP OP_DROP', { differential: 0 })
+  assert.ok(r.report.verification.symbolic.ok)
+  assert.ok(r.script.length <= 8)
+})
+
 test('schedules through the alt stack without keeping spare copies', () => {
   const r = opt('OP_TOALTSTACK OP_2 OP_PICK OP_2 OP_PICK OP_MUL OP_FROMALTSTACK OP_3 OP_ROLL OP_DROP OP_ADD OP_NIP OP_NIP')
   assert.strictEqual(r.script.length, 5)
