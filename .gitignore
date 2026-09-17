@@ -3,3 +3,4 @@ node_modules/
 patterns.json
 overview.md
 .env
+.survey/
