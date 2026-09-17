@@ -199,23 +199,32 @@ function toBuffer (input) {
   return bsv.Script.fromASM(text.replace(/\s+/g, ' ')).toBuffer()
 }
 
-// Whether a push anywhere in buf, including after OP_RETURN, runs past its end.
-function truncated (buf) {
+// What in buf, including the data after OP_RETURN, ASM cannot hold: a push
+// that runs past the end, a push not written with the shortest opcode for its
+// length (ASM records only the data), or an opcode with no name.
+function asmObstacles (buf) {
+  const found = { truncated: false, nonMinimal: false, unnamed: false }
   let i = 0
   while (i < buf.length) {
     const code = buf[i++]
-    if (code === 0 || code > OP.OP_PUSHDATA4) continue
+    if (code > OP.OP_PUSHDATA4) {
+      if (!NAMES[code]) found.unnamed = true
+      continue
+    }
+    if (code === 0) continue
     let len = code
     if (code >= OP.OP_PUSHDATA1) {
       const w = code === OP.OP_PUSHDATA1 ? 1 : code === OP.OP_PUSHDATA2 ? 2 : 4
-      if (i + w > buf.length) return true
+      if (i + w > buf.length) { found.truncated = true; break }
       len = w === 1 ? buf[i] : w === 2 ? buf.readUInt16LE(i) : buf.readUInt32LE(i)
       i += w
+      const shortest = len === 0 ? 0 : len < OP.OP_PUSHDATA1 ? len : len < 0x100 ? OP.OP_PUSHDATA1 : len < 0x10000 ? OP.OP_PUSHDATA2 : OP.OP_PUSHDATA4
+      if (shortest !== code) found.nonMinimal = true
     }
-    if (i + len > buf.length) return true
+    if (i + len > buf.length) { found.truncated = true; break }
     i += len
   }
-  return false
+  return found
 }
 
 // ASM that reads back as exactly `buf`, or an error. ASM cannot say how data
@@ -227,12 +236,12 @@ function exactAsm (buf) {
   let back = null
   try { back = toBuffer(asm) } catch (e) {}
   if (!back || !back.equals(buf)) {
-    const ops = parse(buf, { deadBlocks: false })
-    const why = truncated(buf)
+    const found = asmObstacles(buf)
+    const why = found.truncated
       ? 'it contains a truncated push'
-      : ops.some(o => isPush(o) && o.code !== TAIL && opSize(pushOp(pushValue(o))) !== opSize(o))
+      : found.nonMinimal
         ? 'a push is not minimally encoded, and ASM cannot say how data was pushed'
-        : ops.some(o => o.code >= 0 && !isPush(o) && !NAMES[o.code])
+        : found.unnamed
           ? 'it uses an opcode that has no name, which @smartledger/bsv reads back from ASM only from 9.11.1'
           : !/\bOP_/.test(asm)
               ? 'it is only data pushes, and ASM with no opcodes reads back as hex'
