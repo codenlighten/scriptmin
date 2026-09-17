@@ -9,6 +9,7 @@ const assert = require('node:assert')
 const crypto = require('crypto')
 const { optimize } = require('../src')
 const { OP, numOp, encode, pushOp } = require('../src/script')
+const { encodeNum } = require('../src/num')
 const { differential } = require('../src/verify')
 
 function rng (seed) {
@@ -77,4 +78,70 @@ test('stack-only scripts: heavy fuzz', () => {
     const diff = differential(buf, res.script, { runs: 80, maxDepth: 9 })
     assert.ok(diff.ok, `mismatch for ${buf.toString('hex')} -> ${res.script.toString('hex')}: ${JSON.stringify(diff)}`)
   }
+})
+
+// Every modelled opcode (including signatures, Chronicle opcodes and bit
+// shifts), unusual push encodings, boundary numbers, OP_NOTIF, OP_RETURN and
+// OP_0 OP_IF blocks inside branches, and PICK/ROLL with a computed index. Starting
+// stacks are small numbers, booleans and repeats, so checks pass more often.
+const WIDE = [...STACK, ...ARITH, ...OTHER, 'OP_NUMNOTEQUAL', 'OP_GREATERTHAN', 'OP_LESSTHANOREQUAL',
+  'OP_GREATERTHANOREQUAL', 'OP_SHA1', 'OP_RIPEMD160', 'OP_HASH256', 'OP_OR', 'OP_XOR', 'OP_BIN2NUM',
+  'OP_2DIV', 'OP_SUBSTR', 'OP_LEFT', 'OP_RIGHT', 'OP_CHECKSIG', 'OP_CODESEPARATOR']
+// Size and shift operands stay small so the interpreter does not build huge elements.
+const SIZED = ['OP_NUM2BIN', 'OP_LSHIFT', 'OP_RSHIFT', 'OP_LSHIFTNUM', 'OP_RSHIFTNUM', 'OP_2MUL']
+const ODD = [
+  () => ({ code: OP.OP_PUSHDATA1, data: Buffer.from([7]) }),
+  () => ({ code: 1, data: Buffer.from([3]) }),
+  () => ({ code: 2, data: Buffer.from([2, 0x00]) }),
+  () => ({ code: 1, data: Buffer.from([0x80]) }),
+  () => pushOp(Buffer.from('ffffff7f', 'hex')),
+  () => pushOp(Buffer.from('0000008000', 'hex')),
+  () => pushOp(Buffer.from('ffffffff', 'hex')),
+  () => ({ code: OP.OP_1NEGATE })
+]
+
+function wideScript (r, len) {
+  const ops = []
+  let depth = 0
+  for (let i = 0; i < len; i++) {
+    const k = r() % 100
+    if (k < 42) ops.push({ code: OP[WIDE[r() % WIDE.length]] })
+    else if (k < 46) { ops.push(numOp(r() % 9)); ops.push({ code: OP[SIZED[r() % SIZED.length]] }) } else if (k < 58) { ops.push(numOp(r() % 6)); ops.push({ code: r() % 2 ? OP.OP_PICK : OP.OP_ROLL }) } else if (k < 70) ops.push(numOp((r() % 12) - 3))
+    else if (k < 80) ops.push(ODD[r() % ODD.length]())
+    else if (k < 83) ops.push(pushOp(crypto.randomBytes(r() % 5)))
+    else if (k < 86) ops.push({ code: r() % 2 ? OP.OP_PICK : OP.OP_ROLL })
+    else if (k < 88) ops.push({ code: OP.OP_0 }, { code: OP.OP_IF }, numOp(r() % 4), { code: OP.OP_DUP }, { code: OP.OP_DROP }, { code: OP.OP_ENDIF })
+    else if (k < 93) { ops.push({ code: r() % 2 ? OP.OP_IF : OP.OP_NOTIF }); depth++ } else if (k < 95 && depth) ops.push({ code: OP.OP_ELSE })
+    else if (k < 97 && depth) { ops.push({ code: OP.OP_ENDIF }); depth-- } else if (k < 98 && depth) ops.push({ code: OP.OP_RETURN })
+  }
+  while (depth--) ops.push({ code: OP.OP_ENDIF })
+  return ops
+}
+
+test('wide opcode fuzz with stacks that pass checks', () => {
+  const r = rng(0xB5B)
+  const small = () => {
+    const k = r() % 12
+    if (k < 6) return encodeNum(BigInt(r() % 5))
+    if (k < 8) return Buffer.from([1])
+    if (k < 9) return Buffer.alloc(0)
+    if (k < 10) return Buffer.from([0x80])
+    return crypto.randomBytes(1 + (r() % 4))
+  }
+  const stacks = []
+  for (let i = 0; i < 40; i++) {
+    const st = []
+    const d = r() % 12
+    for (let j = 0; j < d; j++) st.push(j && r() % 4 === 0 ? st[r() % j] : small())
+    stacks.push(st)
+  }
+  let passing = 0
+  for (let i = 0; i < 150; i++) {
+    const buf = encode(wideScript(r, 3 + (r() % 40)))
+    const res = optimize(buf, { differential: false })
+    const diff = differential(buf, res.script, { runs: 20, maxDepth: 10, stacks })
+    assert.ok(diff.ok, `mismatch for ${buf.toString('hex')} -> ${res.script.toString('hex')}: ${JSON.stringify(diff)}`)
+    passing += diff.succeeded
+  }
+  assert.ok(passing > 0)
 })

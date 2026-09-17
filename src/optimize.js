@@ -1,6 +1,6 @@
 'use strict'
 
-const { OP, TAIL, isPush, pushValue, pushOp, opSize, opsSize, parse, encode, toBuffer } = require('./script')
+const { OP, TAIL, DEAD, isPush, pushValue, pushOp, opSize, opsSize, parse, encode, toBuffer } = require('./script')
 const { equivalent } = require('./symbolic')
 const { analyze, heights } = require('./analysis')
 const { peephole } = require('./peephole')
@@ -77,7 +77,7 @@ function optimizeRegion (ops, g, ga, cache, cfg) {
 function normalizePushes (ops) {
   const rewrites = []
   const out = ops.map((op, index) => {
-    if (op.code === TAIL || !isPush(op)) return op
+    if (op.code === TAIL || op.code === DEAD || !isPush(op)) return op
     const min = pushOp(pushValue(op))
     if (opSize(min) >= opSize(op)) return op
     rewrites.push({ pass: 'push-encoding', index, before: [op], after: [min], saved: opSize(op) - opSize(min) })

@@ -2,7 +2,7 @@
 
 // Byte profiler: where a script's serialized bytes go.
 
-const { OP, TAIL, isPush, pushValue, opSize, opName, toAsm } = require('./script')
+const { OP, TAIL, DEAD, isPush, pushValue, opSize, opName, toAsm } = require('./script')
 const { decodeNum } = require('./num')
 
 const CATEGORY = {}
@@ -35,6 +35,7 @@ function profile (ops, { ngrams = 10 } = {}) {
     const op = ops[i]
     const size = opSize(op)
     if (op.code === TAIL) { add('data (after OP_RETURN)', size); continue }
+    if (op.code === DEAD) { add('data (OP_0 OP_IF block)', size); continue }
     const name = isPush(op) ? (op.code === OP.OP_0 || op.code >= OP.OP_1NEGATE ? opName(op.code) : 'push') : opName(op.code)
     const e = opcodes[name] || (opcodes[name] = { count: 0, bytes: 0 })
     e.count++
@@ -60,7 +61,7 @@ function profile (ops, { ngrams = 10 } = {}) {
 
   if (!ngrams) return summary()
   const grams = new Map()
-  const tokens = ops.map(o => (o.code === TAIL ? '<tail>' : isPush(o) ? (pushValue(o).length <= 4 ? toAsm([o]) : `<${pushValue(o).length}b>`) : opName(o.code).replace(/^OP_/, '')))
+  const tokens = ops.map(o => (o.code === TAIL ? '<tail>' : o.code === DEAD ? '<dead>' : isPush(o) ? (pushValue(o).length <= 4 ? toAsm([o]) : `<${pushValue(o).length}b>`) : opName(o.code).replace(/^OP_/, '')))
   const sizes = ops.map(opSize)
   for (let n = 2; n <= 4; n++) {
     for (let i = 0; i + n <= ops.length; i++) {

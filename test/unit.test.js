@@ -79,6 +79,32 @@ test('never touches barriers', () => {
   assert.match(asm(r), /OP_DEPTH OP_2 OP_CHECKMULTISIG OP_CODESEPARATOR/)
 })
 
+test('keeps OP_0 OP_IF data envelopes byte for byte and optimizes around them', () => {
+  const field = 'ab'.repeat(60)
+  const envelope = `OP_0 OP_IF 6f7264 OP_1 746578742f706c61696e OP_0 ${field} OP_0 ${field} OP_1 OP_1 OP_ADD OP_DROP OP_ENDIF`
+  const envelopeHex = toBuffer(envelope).toString('hex')
+  const r = opt('OP_DUP OP_DROP ' + envelope + ' OP_DUP OP_DROP OP_DUP OP_HASH160 ' + '11'.repeat(20) + ' OP_EQUALVERIFY OP_CHECKSIG')
+  assert.ok(r.script.toString('hex').includes(envelopeHex), 'envelope bytes changed')
+  // The leading DUP DROP is what fails an empty stack, so it stays. The block has
+  // no stack effect, so the one after it inherits that guarantee and goes.
+  const [before, after] = asm(r).split(/OP_0 OP_IF.*OP_ENDIF/)
+  assert.strictEqual(before.trim(), 'OP_DUP OP_DROP')
+  assert.ok(!/OP_DROP/.test(after))
+  assert.ok(r.report.verification.symbolic.ok)
+
+  const dead = parse(toBuffer(envelope))
+  assert.strictEqual(dead.length, 1)
+  assert.strictEqual(dead[0].code, -2)
+  assert.strictEqual(encode(dead).toString('hex'), envelopeHex)
+  assert.strictEqual(toAsm(dead), toAsm(parse(toBuffer(envelope), { deadBlocks: false })))
+  assert.ok(profile(envelope).categories.some(c => c.name === 'data (OP_0 OP_IF block)' && c.bytes === envelopeHex.length / 2))
+
+  // An OP_ELSE of its own runs, and a nested one does not count; an unterminated block is not dead.
+  assert.ok(parse(toBuffer('OP_0 OP_IF OP_1 OP_ELSE OP_2 OP_ENDIF')).every(o => o.code >= 0))
+  assert.strictEqual(parse(toBuffer('OP_0 OP_IF OP_1 OP_IF OP_2 OP_ELSE OP_3 OP_ENDIF OP_ENDIF'))[0].code, -2)
+  assert.ok(parse(toBuffer('OP_0 OP_IF OP_1')).every(o => o.code >= 0))
+})
+
 test('equivalence checker', () => {
   assert.ok(equivalent('OP_OVER OP_OVER', 'OP_2DUP'))
   assert.ok(!equivalent('OP_SWAP OP_SUB', 'OP_SUB'))

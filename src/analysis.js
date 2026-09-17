@@ -11,7 +11,7 @@
 // very start of a script must stay: there it is the only thing that fails an
 // empty stack.
 
-const { OP, TAIL } = require('./script')
+const { OP, TAIL, DEAD } = require('./script')
 const { Interner, SymState } = require('./symbolic')
 
 function barrierEffect (op, g, ga, frames) {
@@ -58,6 +58,7 @@ function barrierEffect (op, g, ga, frames) {
       return [g, ga]
     default:
       if (c === TAIL) return [0, 0]
+      if (c === DEAD) return [g, ga] // pushes OP_0, pops it, runs nothing else
       return [Math.max(g - 3, 0), ga]
   }
 }

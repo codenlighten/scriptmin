@@ -14,8 +14,12 @@ NAMES[OP.OP_CHECKSEQUENCEVERIFY] = 'OP_CHECKSEQUENCEVERIFY'
 
 // An op is { code, data } for pushes, { code } otherwise. A tail op
 // ({ code: TAIL, raw }) holds bytes we never touch: everything after a
-// top-level OP_RETURN, or an unparseable remainder.
+// top-level OP_RETURN, or an unparseable remainder. A dead op
+// ({ code: DEAD, raw }) is an `OP_0 OP_IF ... OP_ENDIF` block with no OP_ELSE
+// of its own: it never executes and has no stack effect, and it is how data
+// envelopes (inscriptions and similar) are carried, so it is kept verbatim too.
 const TAIL = -1
+const DEAD = -2
 
 function isPush (op) {
   return op.code >= 0 && (op.code <= OP.OP_PUSHDATA4 || op.code === OP.OP_1NEGATE ||
@@ -31,7 +35,7 @@ function pushValue (op) {
 }
 
 function opSize (op) {
-  if (op.code === TAIL) return op.raw.length
+  if (op.code === TAIL || op.code === DEAD) return op.raw.length
   if (op.code === OP.OP_0 || op.code > OP.OP_PUSHDATA4) return 1
   if (op.code < OP.OP_PUSHDATA1) return 1 + op.data.length
   if (op.code === OP.OP_PUSHDATA1) return 2 + op.data.length
@@ -65,7 +69,33 @@ function numOp (n) {
   return pushOp(encodeNum(n))
 }
 
-function parse (buf) {
+// Where the `OP_0 OP_IF` block whose OP_IF sits at `i` ends (the index after
+// its OP_ENDIF), or -1 if it is not a dead block: it has an OP_ELSE of its own
+// (that branch runs), no matching OP_ENDIF, or a truncated push.
+function deadBlockEnd (buf, i) {
+  let depth = 0
+  while (i < buf.length) {
+    const code = buf[i++]
+    if (code > 0 && code <= OP.OP_PUSHDATA4) {
+      let len = code
+      if (code >= OP.OP_PUSHDATA1) {
+        const w = code === OP.OP_PUSHDATA1 ? 1 : code === OP.OP_PUSHDATA2 ? 2 : 4
+        if (i + w > buf.length) return -1
+        len = w === 1 ? buf[i] : w === 2 ? buf.readUInt16LE(i) : buf.readUInt32LE(i)
+        i += w
+      }
+      if (i + len > buf.length) return -1
+      i += len
+      continue
+    }
+    if (code === OP.OP_IF || code === OP.OP_NOTIF || code === OP.OP_VERIF || code === OP.OP_VERNOTIF) depth++
+    else if (code === OP.OP_ELSE && depth === 1) return -1
+    else if (code === OP.OP_ENDIF && --depth === 0) return i
+  }
+  return -1
+}
+
+function parse (buf, { deadBlocks = true } = {}) {
   const ops = []
   let i = 0
   let depth = 0
@@ -87,6 +117,16 @@ function parse (buf) {
       i += len
       continue
     }
+    if (deadBlocks && code === OP.OP_IF && start > 0 && buf[start - 1] === OP.OP_0 &&
+        ops.length && ops[ops.length - 1].code === OP.OP_0) {
+      const end = deadBlockEnd(buf, start)
+      if (end > 0) {
+        ops.pop()
+        ops.push({ code: DEAD, raw: Buffer.from(buf.slice(start - 1, end)) })
+        i = end
+        continue
+      }
+    }
     ops.push({ code })
     if (code === OP.OP_IF || code === OP.OP_NOTIF || code === OP.OP_VERIF || code === OP.OP_VERNOTIF) depth++
     else if (code === OP.OP_ENDIF) depth--
@@ -103,7 +143,7 @@ function parse (buf) {
 function encode (ops) {
   const parts = []
   for (const op of ops) {
-    if (op.code === TAIL) { parts.push(op.raw); continue }
+    if (op.code === TAIL || op.code === DEAD) { parts.push(op.raw); continue }
     if (op.code === OP.OP_0 || op.code > OP.OP_PUSHDATA4) { parts.push(Buffer.from([op.code])); continue }
     const len = op.data.length
     let head
@@ -122,6 +162,7 @@ function opName (code) {
 function toAsm (ops, { maxData = 0 } = {}) {
   return ops.map(op => {
     if (op.code === TAIL) return `<tail ${op.raw.length} bytes>`
+    if (op.code === DEAD) return toAsm(parse(op.raw, { deadBlocks: false }), { maxData })
     if (op.code === OP.OP_0) return 'OP_0'
     if (op.code > 0 && op.code <= OP.OP_PUSHDATA4) {
       const hex = op.data.toString('hex')
@@ -145,12 +186,12 @@ function toBuffer (input) {
 
 function sameOp (a, b) {
   if (a.code !== b.code) return false
-  if (a.code === TAIL) return a.raw.equals(b.raw)
+  if (a.code === TAIL || a.code === DEAD) return a.raw.equals(b.raw)
   if (a.data || b.data) return !!a.data && !!b.data && a.data.equals(b.data)
   return true
 }
 
 module.exports = {
-  OP, TAIL, isPush, pushValue, opSize, opsSize, pushOp, pushCost, numOp,
+  OP, TAIL, DEAD, isPush, pushValue, opSize, opsSize, pushOp, pushCost, numOp,
   parse, encode, toAsm, toBuffer, opName, sameOp
 }

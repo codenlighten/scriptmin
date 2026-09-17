@@ -104,7 +104,10 @@ The script is split into **regions** the symbolic engine can model, separated
 by **barriers** it cannot: `OP_IF`/`OP_ELSE`/`OP_ENDIF`, `OP_CHECKMULTISIG`,
 `OP_DEPTH`, `OP_CODESEPARATOR`, a `PICK` whose index is computed at runtime,
 and so on. Barriers are never modified and nothing crosses them. Everything
-after a top-level `OP_RETURN` is kept byte for byte.
+after a top-level `OP_RETURN` is kept byte for byte, and so is every
+`OP_0 OP_IF … OP_ENDIF` block without an `OP_ELSE` of its own: it never runs,
+and it is where data envelopes such as inscriptions live, so rewriting its
+contents would change the data without changing what the script does.
 
 Each region goes through these passes, repeated while they keep finding savings:
 
