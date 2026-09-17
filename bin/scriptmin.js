@@ -19,6 +19,13 @@ modular reduction, stack-optimizes it, and checks it against the circuit.
 Compile options: --max-bits <n> (default 1024), --tests <n> (default 20),
 -o, --asm, --json, --effort.
 
+  scriptmin relax --modulus <p> [options] <script-file>
+
+"relax" lifts a field-arithmetic script (OP_ADD, OP_SUB, OP_MUL, OP_MOD by p,
+input range checks) back to its circuit and recompiles it with lazy reduction.
+Relax options: --max-bits <n> (default 768), --modulus-input (take p from the
+stack instead of pushing it), --tests <n>, -o, --json.
+
 Input is hex, ASM (bsv format), or raw bytes (--binary). "-" reads stdin.
 
 Options:
@@ -181,8 +188,47 @@ function compileMain (argv) {
   }
 }
 
+function relaxMain (argv) {
+  const a = { maxBits: 768, tests: 32 }
+  for (let i = 0; i < argv.length; i++) {
+    const x = argv[i]
+    const next = () => { if (i + 1 >= argv.length) die(`${x} needs a value`); return argv[++i] }
+    if (x === '--modulus') a.modulus = next()
+    else if (x === '--max-bits') a.maxBits = Number(next())
+    else if (x === '--modulus-input') a.modulusInput = true
+    else if (x === '--tests') a.tests = Number(next())
+    else if (x === '-o' || x === '--out') a.out = next()
+    else if (x === '--json') a.json = true
+    else if (x.startsWith('-')) die(`unknown option ${x}`)
+    else a.file = x
+  }
+  if (!a.file || !a.modulus) die('relax needs a script file and --modulus')
+  const { relax } = require('../src/relax')
+  let res
+  try {
+    res = relax(readInput({ file: a.file }), { modulus: BigInt(a.modulus), maxBits: a.maxBits, modulusInput: a.modulusInput, tests: a.tests })
+  } catch (e) {
+    die(e.message)
+  }
+  if (a.out) fs.writeFileSync(a.out, res.script.toString('hex') + '\n')
+  const r = res.report
+  if (a.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ script: res.script.toString('hex') }, r), (k, v) => (typeof v === 'bigint' ? String(v) : v), 2) + '\n')
+    return
+  }
+  const out = []
+  out.push(`Original:  ${lpad(fmt(r.original.bytes), 10)} bytes, ${fmt(r.original.mod)} OP_MOD`)
+  out.push(`Relaxed:   ${lpad(fmt(r.relaxed.bytes), 10)} bytes, ${fmt(r.relaxed.mod)} OP_MOD  (reductions only where values outgrow ${r.maxBits} bits or must be canonical)`)
+  out.push('', `Circuit: ${r.inputs} inputs, ${r.gates} gates, ${r.outputs} outputs, ${r.bounds} input range checks kept.`)
+  out.push(`Equal to the original on ${r.checked} canonical input vectors; both refuse ${r.refusalsChecked} out-of-range ones.`)
+  if (r.modulusInput) out.push('The relaxed script takes p as one more input, on top.')
+  process.stdout.write(out.join('\n') + '\n')
+  if (!a.out) process.stdout.write('\n' + res.script.toString('hex') + '\n')
+}
+
 function main () {
   if (process.argv[2] === 'compile') return compileMain(process.argv.slice(3))
+  if (process.argv[2] === 'relax') return relaxMain(process.argv.slice(3))
   const a = parseArgs(process.argv.slice(2))
   const buf = readInput(a)
 

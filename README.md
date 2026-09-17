@@ -58,6 +58,7 @@ scriptmin --effort high script.hex       # wider windows, deeper search
 scriptmin --db patterns.json script.hex  # reuse and grow a pattern database
 scriptmin --stacks inputs.json script.hex  # test against real unlocking stacks
 scriptmin compile circuit.json           # compile a prime-field circuit (see below)
+scriptmin relax --modulus <p> script.hex # re-reduce existing field arithmetic lazily
 ```
 
 Input can be hex, ASM in bsv's format (`OP_DUP 14 OP_PICK`, data as bare hex),
@@ -232,6 +233,46 @@ is overwhelming for a 254-bit prime. The stack optimization applied afterwards
 is still proven symbolically. Inputs outside `[0, p)` are not range-checked:
 that remains the verifier's responsibility, as with any field circuit.
 
+## Relaxing field arithmetic
+
+`scriptmin relax` works on scripts that already exist. A script composed from
+modules that each return canonical field elements reduces after almost every
+addition, because every module boundary promises canonical output. relax lifts
+the script back to its circuit, drops every reduction by p, and compiles the
+circuit again with lazy reduction.
+
+```bash
+scriptmin relax --modulus 0x1a0111ea…aaab fp12-mul.hex
+scriptmin relax --modulus 0x1a0111ea…aaab --modulus-input fp12-mul.hex   # take p from the stack
+```
+
+- **What it accepts.** The script may use only pushes, stack moves, `OP_ADD`,
+  `OP_SUB`, `OP_MUL`, `OP_MOD` by the one constant prime, and constant range
+  checks on its inputs (`OP_WITHIN OP_VERIFY`). It refuses anything else.
+- **Why dropping reductions is safe.** Ring operations preserve congruence mod
+  p, so every value of the relaxed circuit is congruent to the original's. The
+  outputs are reduced to canonical form.
+- **What equality then needs.** The relaxed outputs equal the original's
+  exactly when the original's outputs are canonical for canonical inputs. That
+  is what a field module promises, and relax checks it on the interpreter:
+  all-zero, all-(p−1) and random canonical inputs must give identical stacks,
+  and out-of-range inputs must be refused by both.
+- **Range checks.** They are kept and moved to the front of the script.
+
+On the BLS12-381 tower of
+[script-high-level-modules](docs/real-world.md), in the form those modules take
+inside a pairing (inputs already known canonical, p on the stack):
+
+| module | scriptmin | relaxed | `OP_MOD` |
+| --- | ---: | ---: | ---: |
+| fp12.mul | 2,032 | 1,493 | 188 → 27 |
+| fp12.cycSqr | 917 | 665 | 98 → 24 |
+
+Interpreter time drops less than the reduction count, 11–22%, because
+unreduced operands make each `OP_MUL` larger. Where a module multiplies by large
+constants (the Frobenius maps) relaxing makes it bigger, so it is a choice to
+measure per module, not a pass to apply blindly.
+
 ## Library
 
 ```js
@@ -314,6 +355,7 @@ src/windows.js    window selection and dynamic programming
 src/verify.js     whole-script proof, differential interpreter testing
 src/profile.js    byte profiler
 src/field.js      circuit IR compiler with lazy modular reduction
+src/relax.js      lift field-arithmetic scripts back to circuits and re-reduce them
 src/optimize.js   pipeline and report
 bin/scriptmin.js  command line
 ```

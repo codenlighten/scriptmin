@@ -250,3 +250,35 @@ test('beam scheduling is never worse than greedy, and skips deep stacks', () => 
   assert.ok(shallow.beamRuns > 0)
   assert.ok(equivOps(ops, out))
 })
+
+test('relax: re-reduces field arithmetic lazily, keeps input range checks, and refuses what it cannot prove', () => {
+  const { relax } = require('../src/relax')
+  const { evaluate } = require('../src/verify')
+  const bsvI = require('@smartledger/bsv').Script.Interpreter
+  const P = (1n << 127n) - 1n // a Mersenne prime
+  const ph = encodeNum(P).toString('hex')
+  // Inputs a, b, c (c on top), each range-checked; then r = ((a*b mod p) + c) mod p, s = (a - b + p) mod p.
+  const check = (d) => `${d} OP_PICK 0 ${ph} OP_WITHIN OP_VERIFY`
+  const script = [
+    check('OP_2'), check('OP_1'), check('OP_0'),
+    `OP_2 OP_PICK OP_2 OP_PICK OP_MUL ${ph} OP_MOD OP_OVER OP_ADD ${ph} OP_MOD`,
+    `OP_3 OP_PICK OP_3 OP_PICK OP_SUB ${ph} OP_ADD ${ph} OP_MOD`,
+    'OP_2SWAP OP_2DROP OP_ROT OP_DROP'
+  ].join(' ')
+  for (const modulusInput of [false, true]) {
+    const r = relax(script, { modulus: P, modulusInput, tests: 16 })
+    assert.strictEqual(r.report.bounds, 3)
+    assert.ok(r.report.relaxed.mod <= r.report.original.mod)
+    // Out-of-range input refused by both.
+    const flags = bsvI.currentConsensusFlags()
+    const bad = [encodeNum(5n), encodeNum(P), encodeNum(7n)]
+    assert.strictEqual(evaluate(toBuffer(script), bad, flags).ok, false)
+    assert.strictEqual(evaluate(r.script, modulusInput ? bad.concat([encodeNum(P)]) : bad, flags).ok, false)
+  }
+  assert.throws(() => relax('OP_2DUP OP_ADD OP_SHA256', { modulus: P }), /not ring arithmetic/)
+  // Outputs that are not canonical (a + b, never reduced): dropping nothing still
+  // changes nothing, but a script reducing by something else must be refused.
+  assert.throws(() => relax(`OP_ADD ${encodeNum(P - 2n).toString('hex')} OP_MOD`, { modulus: P }), /not by the constant modulus/)
+  // A script whose output is congruent but not canonical is caught by the comparison.
+  assert.throws(() => relax(`OP_ADD`, { modulus: P, tests: 16 }), /disagrees/)
+})

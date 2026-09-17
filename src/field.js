@@ -125,9 +125,12 @@ function emitProgram (nInputs, steps, outputs) {
 
 // Plan the program. maxBits: largest intermediate magnitude allowed, in bits;
 // 0 reduces after every operation (the reference program).
-function plan (c, { maxBits = 0 } = {}) {
+// modulusInput: take p from the stack, as one more input above the circuit's
+// own, instead of pushing it — for code composed into a script that already
+// holds p, where pushing it again at every call would cost its full width.
+function plan (c, { maxBits = 0, modulusInput = false } = {}) {
   const p = c.p
-  const P = { const: p }
+  const P = modulusInput ? 'i' + c.inputs : { const: p }
   const steps = []
   const limit = maxBits ? (1n << BigInt(maxBits)) : 0n
   // Per value: stack ref and bounds [lo, hi] of the integer it holds.
@@ -201,14 +204,15 @@ function plan (c, { maxBits = 0 } = {}) {
 // compileIR(ir, { maxBits }) -> { script, reference }
 //   script:    lazily reduced program, before stack optimization
 //   reference: every value reduced after every operation
-function compileIR (ir, { maxBits = 1024 } = {}) {
+function compileIR (ir, { maxBits = 1024, modulusInput = false } = {}) {
   const c = parseIR(ir)
-  const lazy = plan(c, { maxBits })
-  const ref = plan(c, { maxBits: 0 })
+  const lazy = plan(c, { maxBits, modulusInput })
+  const ref = plan(c, { maxBits: 0, modulusInput })
+  const n = c.inputs + (modulusInput ? 1 : 0)
   return {
     circuit: c,
-    script: emitProgram(c.inputs, lazy.steps, lazy.outputs),
-    reference: emitProgram(c.inputs, ref.steps, ref.outputs)
+    script: emitProgram(n, lazy.steps, lazy.outputs),
+    reference: emitProgram(n, ref.steps, ref.outputs)
   }
 }
 
