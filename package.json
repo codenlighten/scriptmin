@@ -44,6 +44,6 @@
     "@smartledger/bsv": "^9.10.1"
   },
   "devDependencies": {
-    "@smartledger/bsv": "^9.11.0"
+    "@smartledger/bsv": "^9.11.1"
   }
 }
