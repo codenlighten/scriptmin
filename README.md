@@ -37,11 +37,11 @@ for script parsing, hashing and the reference interpreter used in testing.
 ## Install
 
 ```bash
-npm install scriptmin @smartledger/bsv
+npm install @smartledger/scriptmin @smartledger/bsv
 npx scriptmin --help
 ```
 
-Or globally: `npm install -g scriptmin @smartledger/bsv`.
+Or globally: `npm install -g @smartledger/scriptmin @smartledger/bsv` (the command is `scriptmin`).
 
 Requires Node 20.19+ (the version `@smartledger/bsv` needs). `@smartledger/bsv`
 is a peer dependency: a project that already uses it shares its copy.
@@ -284,7 +284,7 @@ measure per module, not a pass to apply blindly.
 ## Library
 
 ```js
-const { optimize, profile, proveEquivalent, differential, Cache } = require('scriptmin')
+const { optimize, profile, proveEquivalent, differential, Cache } = require('@smartledger/scriptmin')
 
 const { script, ops, report } = optimize(hexOrAsmOrBuffer, {
   effort: 'medium',      // 'low' | 'medium' | 'high'
