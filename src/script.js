@@ -251,6 +251,27 @@ function exactAsm (buf) {
   return asm
 }
 
+// The name of the standard output template `buf` matches exactly, or null.
+// Wallets, indexers and relay policy recognise these by their bytes, so they are
+// returned unchanged even where a shorter equivalent exists (a bare multisig
+// listing the same key twice could reuse it with OP_OVER, and stop being one).
+function standardTemplate (buf) {
+  const n = buf.length
+  if (n === 25 && buf[0] === OP.OP_DUP && buf[1] === OP.OP_HASH160 && buf[2] === 20 && buf[23] === OP.OP_EQUALVERIFY && buf[24] === OP.OP_CHECKSIG) return 'P2PKH'
+  if (n === 23 && buf[0] === OP.OP_HASH160 && buf[1] === 20 && buf[22] === OP.OP_EQUAL) return 'P2SH'
+  if ((n === 35 && buf[0] === 33 && buf[34] === OP.OP_CHECKSIG) || (n === 67 && buf[0] === 65 && buf[66] === OP.OP_CHECKSIG)) return 'P2PK'
+  if (n >= 1 && (buf[0] === OP.OP_RETURN || (n >= 2 && buf[0] === OP.OP_0 && buf[1] === OP.OP_RETURN))) return 'data output'
+  if (n >= 3 && buf[n - 1] === OP.OP_CHECKMULTISIG) {
+    const ops = parse(buf, { deadBlocks: false })
+    const m = ops[0].code - OP.OP_1 + 1
+    const k = ops[ops.length - 2].code - OP.OP_1 + 1
+    const keys = ops.slice(1, -2)
+    if (m >= 1 && m <= 16 && k >= 1 && k <= 16 && m <= k && keys.length === k &&
+        keys.every(o => o.data && (o.data.length === 33 || o.data.length === 65) && o.code === o.data.length)) return 'bare multisig'
+  }
+  return null
+}
+
 function sameOp (a, b) {
   if (a.code !== b.code) return false
   if (a.code === TAIL || a.code === DEAD) return a.raw.equals(b.raw)
@@ -260,5 +281,5 @@ function sameOp (a, b) {
 
 module.exports = {
   OP, TAIL, DEAD, isPush, pushValue, opSize, opsSize, pushOp, pushCost, numOp,
-  parse, encode, toAsm, exactAsm, toBuffer, opName, sameOp
+  parse, encode, toAsm, exactAsm, toBuffer, opName, sameOp, standardTemplate
 }

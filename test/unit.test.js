@@ -110,6 +110,48 @@ test('keeps OP_0 OP_IF data envelopes byte for byte and optimizes around them', 
   assert.match(asm(opt(verif, { chronicle: false })), /OP_ENDIF OP_DUP OP_DROP OP_1$/)
 })
 
+test('keeps data that nothing uses, and standard templates, byte for byte', () => {
+  const key = '02' + '11'.repeat(32)
+  // Data carriers seen on mainnet: a tag dropped on its own, a document before
+  // a P2PK check, and signed protocol fields dropped in pairs.
+  for (const src of [
+    '64796c616e31 OP_DROP',
+    'OP_PUSHDATA1 ' + '20'.repeat(80) + ' OP_DROP ' + key + ' OP_CHECKSIG',
+    key + ' OP_CHECKSIG 6167696431 ' + '33'.repeat(20) + ' 32 OP_0 7c OP_2DROP OP_2DROP OP_DROP'
+  ]) {
+    const buf = toBuffer(src.replace('OP_PUSHDATA1 ' + '20'.repeat(80), '4c50' + '20'.repeat(80)))
+    const r = opt(buf)
+    assert.ok(r.script.equals(buf), `changed: ${src.slice(0, 40)} -> ${toAsm(r.ops, { maxData: 4 })}`)
+    assert.ok(r.report.kept.dataPushes > 0)
+    assert.ok(r.report.warnings.some(w => /kept byte for byte/.test(w)))
+    // Allowed when asked.
+    assert.ok(opt(buf, { keepData: false }).script.length < buf.length)
+  }
+
+  // A Boost-style puzzle: the content hash is kept, the code around it is still optimized.
+  const hash = 'ab'.repeat(32)
+  const boost = toBuffer(`${hash} 21e8 OP_SIZE OP_4 OP_PICK OP_SHA256 OP_SWAP OP_SPLIT OP_DROP OP_EQUALVERIFY OP_DROP OP_CHECKSIG`)
+  const rb = opt(boost)
+  assert.ok(rb.script.toString('hex').includes('20' + hash))
+  assert.ok(rb.script.length < boost.length)
+  assert.ok(rb.report.verification.symbolic.ok)
+
+  // Used constants are not data: they still fold and deduplicate.
+  assert.strictEqual(opt('aabbccdd aabbccdd OP_EQUAL OP_VERIFY OP_1').script.toString('hex'), '51')
+
+  // A bare multisig listing a key twice is left as the template, not rewritten with OP_OVER.
+  const k1 = '04' + 'ac'.repeat(64)
+  const k2 = '04' + '3e'.repeat(64)
+  const ms = toBuffer(`OP_2 ${k1} ${k2} ${k1} OP_3 OP_CHECKMULTISIG`)
+  const rm = opt(ms)
+  assert.ok(rm.script.equals(ms))
+  assert.strictEqual(rm.report.kept.template, 'bare multisig')
+  assert.ok(opt(ms, { templates: false }).script.length < ms.length)
+  for (const [t, name] of [['76a914' + '11'.repeat(20) + '88ac', 'P2PKH'], ['a914' + '11'.repeat(20) + '87', 'P2SH'], ['21' + key + 'ac', 'P2PK'], ['006a0474657374', 'data output']]) {
+    assert.strictEqual(opt(t).report.kept.template, name)
+  }
+})
+
 test('equivalence checker', () => {
   assert.ok(equivalent('OP_OVER OP_OVER', 'OP_2DUP'))
   assert.ok(!equivalent('OP_SWAP OP_SUB', 'OP_SUB'))

@@ -109,6 +109,25 @@ after a top-level `OP_RETURN` is kept byte for byte, and so is every
 and it is where data envelopes such as inscriptions live, so rewriting its
 contents would change the data without changing what the script does.
 
+Two more things are kept as they are, because a script can be shorter without
+being the same output:
+
+- **Data that nothing uses.** A push no operation takes as an operand and that
+  is not left on the stack is a data carrier: `<tag> OP_DROP`, a document
+  before a `OP_CHECKSIG`, protocol fields signed and dropped in pairs. Dropping
+  it would not change what the script does, but the output would no longer
+  carry what it was made to carry. Such pushes are barriers, kept byte for
+  byte with their encoding; where a region carries data, its one-byte fields
+  and empty pushes are kept too. `keepData: false` (`--drop-unused-data`)
+  removes them, and `dataMinBytes` (default 2) sets how long an unused push
+  must be for its region to count as carrying data.
+- **Standard output templates.** P2PKH, P2PK, P2SH, bare multisig and
+  `OP_RETURN` data outputs are returned unchanged. Wallets, indexers and relay
+  policy recognise them by their exact bytes: a bare multisig that lists the
+  same key twice could reuse it with `OP_OVER` and save 65 bytes, and stop
+  being a bare multisig. `templates: false` (`--rewrite-templates`) optimizes
+  them anyway.
+
 Each region goes through these passes, repeated while they keep finding savings:
 
 | Pass | What it does |
@@ -303,6 +322,9 @@ const { script, ops, report } = optimize(hexOrAsmOrBuffer, {
   stacks: [],            // extra starting stacks (arrays of Buffers)
   verify: true,          // symbolic proof
   chronicle: true,
+  keepData: true,        // keep pushes nothing uses (they carry data)
+  dataMinBytes: 2,       // unused push length that marks a region as carrying data
+  templates: true,       // leave standard outputs (P2PKH, bare multisig, ...) unchanged
   cache: new Cache()     // share across calls to reuse solutions
 })
 
@@ -311,6 +333,7 @@ report.passes           // [{ name, saved }]
 report.byCategory       // [{ name, before, after, saved }]  stack, arithmetic, data pushes...
 report.rewrites         // [{ pass, rule?, before, after, saved, regionOffset }]
 report.verification     // { symbolic, differential }
+report.kept             // { template, dataPushes }
 
 profile(script)                    // categories, opcodes, PICK/ROLL depths, costly patterns
 proveEquivalent(a, b)              // { ok, regions, barriers } or { ok: false, reason }

@@ -164,3 +164,41 @@ test('conditionals whose meaning changes with Chronicle, checked in both eras', 
     assert.ok(diff.ok, `mismatch for ${src} -> ${res.script.toString('hex')}: ${JSON.stringify(diff)}`)
   }
 })
+
+// Data pushes interleaved with code and dropped in every shape: whatever the
+// optimizer does to the code, each unused data push of two or more bytes comes
+// out byte for byte and in order, and the script still behaves the same.
+test('data that nothing uses survives optimization, in order', () => {
+  const r = rng(0xDA7A)
+  const { parse } = require('../src/script')
+  const { markUnusedData } = require('../src/analysis')
+  const CODE = ['OP_DUP', 'OP_DROP', 'OP_SWAP', 'OP_OVER', 'OP_ADD', 'OP_NIP', 'OP_ROT', 'OP_1ADD', 'OP_SHA256', 'OP_SIZE', 'OP_EQUAL', 'OP_TOALTSTACK', 'OP_FROMALTSTACK']
+  let checked = 0
+  for (let i = 0; i < 300; i++) {
+    const ops = []
+    const n = 3 + (r() % 16)
+    for (let k = 0; k < n; k++) {
+      const x = r() % 10
+      if (x < 3) ops.push(pushOp(crypto.randomBytes(r() % 6)))
+      else if (x < 5) ops.push(numOp(r() % 4))
+      else if (x < 6) ops.push({ code: [OP.OP_DROP, OP.OP_2DROP, OP.OP_NIP][r() % 3] })
+      else ops.push({ code: OP[CODE[r() % CODE.length]] })
+    }
+    const buf = encode(ops)
+    const marked = parse(buf)
+    markUnusedData(marked)
+    const kept = marked.filter(o => o.keep).map(o => encode([o]).toString('hex'))
+    const res = optimize(buf, { differential: false })
+    let at = 0
+    const hex = res.script.toString('hex')
+    for (const k of kept) {
+      const j = hex.indexOf(k, at)
+      assert.ok(j >= 0, `lost ${k} from ${buf.toString('hex')} -> ${hex}`)
+      at = j + k.length
+    }
+    checked += kept.length
+    const diff = differential(buf, res.script, { runs: 20, maxDepth: 6 })
+    assert.ok(diff.ok, `mismatch for ${buf.toString('hex')} -> ${hex}: ${JSON.stringify(diff)}`)
+  }
+  assert.ok(checked > 50)
+})

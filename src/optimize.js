@@ -1,8 +1,8 @@
 'use strict'
 
-const { OP, TAIL, DEAD, isPush, pushValue, pushOp, opSize, opsSize, parse, encode, toBuffer } = require('./script')
+const { OP, TAIL, DEAD, isPush, pushValue, pushOp, opSize, opsSize, parse, encode, toBuffer, standardTemplate } = require('./script')
 const { equivalent } = require('./symbolic')
-const { analyze, heights } = require('./analysis')
+const { analyze, heights, markUnusedData } = require('./analysis')
 const { peephole } = require('./peephole')
 const { windowsRegion } = require('./windows')
 const { rescheduleFragment } = require('./schedule')
@@ -77,7 +77,7 @@ function optimizeRegion (ops, g, ga, cache, cfg) {
 function normalizePushes (ops) {
   const rewrites = []
   const out = ops.map((op, index) => {
-    if (op.code === TAIL || op.code === DEAD || !isPush(op)) return op
+    if (op.code === TAIL || op.code === DEAD || op.keep || !isPush(op)) return op
     const min = pushOp(pushValue(op))
     if (opSize(min) >= opSize(op)) return op
     rewrites.push({ pass: 'push-encoding', index, before: [op], after: [min], saved: opSize(op) - opSize(min) })
@@ -86,8 +86,14 @@ function normalizePushes (ops) {
   return { ops: out, rewrites }
 }
 
-function warningsFor (ops) {
+function warningsFor (ops, kept) {
   const w = []
+  if (kept.template) {
+    w.push(`The script is a standard ${kept.template} output, recognised by its exact bytes; it was left unchanged (templates: false to optimize it anyway).`)
+  }
+  if (kept.dataPushes) {
+    w.push(`${kept.dataPushes} data push${kept.dataPushes === 1 ? '' : 'es'} that nothing in the script uses ${kept.dataPushes === 1 ? 'was' : 'were'} kept byte for byte: removing ${kept.dataPushes === 1 ? 'it' : 'them'} would not change what the script does, but would lose the data the output carries (keepData: false to allow it).`)
+  }
   const has = codes => ops.some(o => codes.includes(o.code))
   if (has([OP.OP_CHECKSIG, OP.OP_CHECKSIGVERIFY, OP.OP_CHECKMULTISIG, OP.OP_CHECKMULTISIGVERIFY])) {
     w.push('The script checks signatures. Signatures commit to the script code, so they (and any OP_PUSH_TX preimage) must be produced against the optimized script. Covenants that embed their own script hash, length or bytes must be regenerated from it.')
@@ -111,10 +117,18 @@ function optimize (input, options = {}) {
   cfg.cache = cache
   const buf = toBuffer(input)
   const original = parse(buf)
+  const kept = { template: null, dataPushes: 0 }
+  if (cfg.templates !== false) kept.template = standardTemplate(buf)
+  // Before push normalization, so kept pushes keep their encoding too.
+  if (!kept.template && cfg.keepData !== false) {
+    kept.dataPushes = markUnusedData(original, { minBytes: cfg.dataMinBytes ?? 2, chronicle: cfg.chronicle })
+  }
 
   let rewrites = []
   let ops = original
-  if (cfg.pushes !== false) {
+  if (kept.template) {
+    // Nothing to do: fall through with no regions rewritten.
+  } else if (cfg.pushes !== false) {
     const res = normalizePushes(ops)
     ops = res.ops
     rewrites = rewrites.concat(res.rewrites)
@@ -126,6 +140,7 @@ function optimize (input, options = {}) {
   for (const op of original) { offsets.push(off); off += opSize(op) }
 
   const { regions, barriers } = analyze(ops, cfg)
+  if (kept.template) regions.length = 0
   const out = []
   let cursor = 0
   let reverted = 0
@@ -214,7 +229,8 @@ function optimize (input, options = {}) {
       reverted,
       verification,
       cache: { hits: cache.hits, entries: cache.added, searches: cache.searches },
-      warnings: warningsFor(original),
+      kept,
+      warnings: warningsFor(original, kept),
       ms: Date.now() - t0
     }
   }
