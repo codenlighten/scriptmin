@@ -11,11 +11,12 @@
 // very start of a script must stay: there it is the only thing that fails an
 // empty stack.
 
-const { OP, TAIL, DEAD } = require('./script')
+const { OP, TAIL, DEAD, isPush, pushValue } = require('./script')
 const { Interner, SymState } = require('./symbolic')
 
 function barrierEffect (op, g, ga, frames) {
   const c = op.code
+  if (op.keep) return [g + 1, ga] // a data push kept verbatim
   switch (c) {
     case OP.OP_IF:
     case OP.OP_NOTIF: {
@@ -91,6 +92,35 @@ function analyze (ops, opts = {}) {
   return { regions, barriers }
 }
 
+// Marks, with `keep: true`, the pushes whose value nothing uses: no operation
+// takes it as an operand, and it is not left on the stack for code after its
+// region. Such a push only carries data (a protocol tag, a content hash, a
+// document), so removing it would not change what the script does but would
+// lose what the output was for. A region is treated as carrying data when one
+// of its unused pushes is at least `minBytes` long; then every unused push in
+// it is kept. A kept push is a barrier, left byte for byte by every pass and
+// by the proof. Returns the number of pushes marked.
+function markUnusedData (ops, { minBytes = 2, chronicle = true } = {}) {
+  const { regions } = analyze(ops, { chronicle })
+  let marked = 0
+  for (const r of regions) {
+    const I = new Interner()
+    const st = new SymState(I, { chronicle, trackUses: true })
+    for (let i = r.start; i < r.end; i++) st.step(ops[i])
+    const live = new Set([...st.uses, ...st.main, ...st.alt])
+    const unused = []
+    for (let i = r.start; i < r.end; i++) {
+      const op = ops[i]
+      if (isPush(op) && !op.keep && !live.has(I.konst(pushValue(op)))) unused.push(op)
+    }
+    // A region carrying data keeps all of it, one-byte fields and empty pushes
+    // included: those are as much a part of a protocol's payload as the rest.
+    if (!unused.some(op => pushValue(op).length >= minBytes)) continue
+    for (const op of unused) { op.keep = true; marked++ }
+  }
+  return marked
+}
+
 // Guaranteed main/alt heights before each op of a region, given its entry guarantee.
 function heights (ops, g, ga, opts = {}) {
   const I = new Interner()
@@ -105,4 +135,4 @@ function heights (ops, g, ga, opts = {}) {
   return { hm, ha }
 }
 
-module.exports = { analyze, heights }
+module.exports = { analyze, heights, markUnusedData }

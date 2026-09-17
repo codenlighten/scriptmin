@@ -44,6 +44,8 @@ Options:
   --stacks <file>         JSON array of starting stacks (arrays of hex) to test against
   --no-verify             skip the symbolic equivalence proof (not recommended)
   --no-chronicle          treat Chronicle opcodes (OP_SUBSTR, OP_LEFT, ...) as barriers
+  --drop-unused-data      let pushes that nothing uses be removed (kept by default: they carry data)
+  --rewrite-templates     optimize standard outputs (P2PKH, P2PK, P2SH, bare multisig) too
   -h, --help              show this help
 `
 
@@ -66,6 +68,8 @@ function parseArgs (argv) {
       case '--stacks': a.stacks = next(); break
       case '--no-verify': a.verify = false; break
       case '--no-chronicle': a.chronicle = false; break
+      case '--drop-unused-data': a.keepData = false; break
+      case '--rewrite-templates': a.templates = false; break
       case '-h': case '--help': process.stdout.write(USAGE); process.exit(0); break
       default:
         if (x.startsWith('-') && x !== '-') die(`unknown option ${x}`)
@@ -270,6 +274,8 @@ function main () {
       cache,
       verify: a.verify,
       chronicle: a.chronicle,
+      keepData: a.keepData,
+      templates: a.templates,
       differential: a.tests,
       stacks
     })

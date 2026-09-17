@@ -172,7 +172,7 @@ const STACK_OPS = new Set([
 ])
 
 class SymState {
-  constructor (interner, { record = false, chronicle = true } = {}) {
+  constructor (interner, { record = false, chronicle = true, trackUses = false } = {}) {
     this.I = interner
     this.main = []
     this.alt = []
@@ -182,6 +182,9 @@ class SymState {
     this.apps = record ? [] : null
     this.usedAlt = false
     this.chronicle = chronicle
+    // Values some operation consumed (as an operand or a PICK/ROLL index),
+    // whether or not it was folded. Stack moves and drops do not count.
+    this.uses = trackUses ? new Set() : null
   }
 
   ensure (k) {
@@ -209,7 +212,7 @@ class SymState {
   // True if `op` can be modelled; false leaves the state untouched.
   supports (op) {
     const code = op.code
-    if (code < 0) return false
+    if (code < 0 || op.keep) return false
     if (isPush(op)) return true
     if (STACK_OPS.has(code)) {
       if (code === OP.OP_PICK || code === OP.OP_ROLL) {
@@ -269,7 +272,9 @@ class SymState {
       }
       case OP.OP_PICK:
       case OP.OP_ROLL: {
-        const n = Number(decodeNum(this.I.constBuf(m.pop()), 4))
+        const index = m.pop()
+        if (this.uses) this.uses.add(index)
+        const n = Number(decodeNum(this.I.constBuf(index), 4))
         this.ensure(n + 1)
         const s = this.main
         const idx = s.length - 1 - n
@@ -293,6 +298,7 @@ class SymState {
     const s = this.main
     const args = sp.pops ? s.splice(s.length - sp.pops) : []
     const I = this.I
+    if (this.uses) for (const a of args) this.uses.add(a)
 
     if (code === OP.OP_VERIFY) {
       const x = args[0]
