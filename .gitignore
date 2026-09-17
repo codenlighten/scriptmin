@@ -2,3 +2,4 @@ node_modules/
 *.cpuprofile
 patterns.json
 overview.md
+.env
