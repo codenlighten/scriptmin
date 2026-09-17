@@ -2,6 +2,9 @@
 'use strict'
 
 const fs = require('fs')
+
+// Output piped into something that stops reading (| head) is not an error.
+process.stdout.on('error', (e) => { if (e.code === 'EPIPE') process.exit(0); throw e })
 const path = require('path')
 const { optimize, profile, Cache, toAsm, toBuffer } = require('../src')
 const { parse } = require('../src/script')

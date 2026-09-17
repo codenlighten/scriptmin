@@ -37,13 +37,21 @@ for script parsing, hashing and the reference interpreter used in testing.
 ## Install
 
 ```bash
-npm install
-npm test
+npm install scriptmin @smartledger/bsv
 npx scriptmin --help
 ```
 
-Requires Node 20.19+ (the version `@smartledger/bsv` needs). `@smartledger/bsv` is a
-peer dependency: a project that already uses it shares its copy.
+Or globally: `npm install -g scriptmin @smartledger/bsv`.
+
+Requires Node 20.19+ (the version `@smartledger/bsv` needs). `@smartledger/bsv`
+is a peer dependency: a project that already uses it shares its copy.
+
+From a clone:
+
+```bash
+git clone https://github.com/codenlighten/scriptmin
+cd scriptmin && npm install && npm test
+```
 
 ## Command line
 

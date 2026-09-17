@@ -2,23 +2,40 @@
   "name": "scriptmin",
   "version": "0.1.0",
   "description": "Bitcoin Script minimizer: byte profiler, symbolic stack IR, stack scheduler and superoptimizer with proven-equivalent rewrites",
-  "main": "src/index.js",
-  "scripts": {
-    "test": "node --test test/*.test.js",
-    "bench": "node examples/bench.js 50,500,2000 medium pick && node examples/bench-tower.js 1,2 medium lastuse"
-  },
   "keywords": [
     "bitcoin",
     "bsv",
+    "bitcoin-script",
     "script",
     "optimizer",
+    "minifier",
     "superoptimizer",
-    "minifier"
+    "stack-machine",
+    "smart-contracts"
   ],
-  "author": "codenlighten <greg@smartledger.technology>",
+  "homepage": "https://github.com/codenlighten/scriptmin#readme",
+  "bugs": {
+    "url": "https://github.com/codenlighten/scriptmin/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codenlighten/scriptmin.git"
+  },
   "license": "MIT",
+  "author": "codenlighten <greg@smartledger.technology>",
+  "main": "src/index.js",
   "bin": {
     "scriptmin": "bin/scriptmin.js"
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "examples/",
+    "docs/"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bench": "node examples/bench.js 50,500,2000 medium pick && node examples/bench-tower.js 1,2 medium lastuse"
   },
   "engines": {
     "node": ">=20.19"
